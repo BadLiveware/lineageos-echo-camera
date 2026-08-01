@@ -13,6 +13,7 @@ This guide is for integrators with an existing LineageOS 18.1 build environment 
 Copy the manifest before syncing a new checkout:
 
 ```bash
+mkdir -p /path/to/lineage-18.1/.repo/local_manifests
 cp /path/to/lineageos-camera/manifests/amazon_mt8163-camera.xml \
   /path/to/lineage-18.1/.repo/local_manifests/
 cd /path/to/lineage-18.1

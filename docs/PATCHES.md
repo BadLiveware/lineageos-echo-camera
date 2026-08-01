@@ -30,7 +30,7 @@ The AWB wrappers remain local ELF symbols. Exporting the proprietary C++ names c
 
 ## Regenerating the bundle
 
-`regenerate-patches.sh` uses an alternate Git index for every Android project. It captures committed, modified, and untracked non-ignored files relative to the recorded base without staging or changing the development checkout.
+`regenerate-patches.sh` uses an alternate Git index for every Android project. It captures committed, modified, and untracked non-ignored files relative to the recorded base without staging or changing the development checkout. New payloads and checksums are built in a sibling staging directory and replace the published bundle only after the complete series succeeds.
 
 ```bash
 ./scripts/regenerate-patches.sh /path/to/lineage-18.1-development-tree

@@ -6,9 +6,16 @@ No proprietary camera binaries are distributed. Extract them from a compatible d
 
 ## Quick start
 
-Start with a clean LineageOS 18.1 checkout at the revisions recorded in [`patches/lineage-18.1/series.tsv`](patches/lineage-18.1/series.tsv). The pinned local manifest in [`manifests/amazon_mt8163-camera.xml`](manifests/amazon_mt8163-camera.xml) supplies the Amazon projects and fixes the patched projects to those revisions.
+Start with a clean LineageOS 18.1 checkout. The pinned local manifest supplies the Amazon projects and fixes every patched project to the revisions recorded in [`series.tsv`](patches/lineage-18.1/series.tsv).
 
 ```bash
+mkdir -p /path/to/lineage-18.1/.repo/local_manifests
+cp manifests/amazon_mt8163-camera.xml \
+  /path/to/lineage-18.1/.repo/local_manifests/
+cd /path/to/lineage-18.1
+repo sync
+
+cd /path/to/lineageos-camera
 ./scripts/apply-patches.sh --check /path/to/lineage-18.1
 ./scripts/apply-patches.sh /path/to/lineage-18.1
 ```

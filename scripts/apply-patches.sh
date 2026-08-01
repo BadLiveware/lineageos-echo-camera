@@ -22,6 +22,14 @@ series="$bundle/series.tsv"
   echo "Missing patch series: $series" >&2
   exit 1
 }
+[[ -f "$bundle/SHA256SUMS" ]] || {
+  echo "Missing patch checksums: $bundle/SHA256SUMS" >&2
+  exit 1
+}
+(
+  cd "$bundle"
+  sha256sum -c SHA256SUMS
+)
 
 # Preflight every project before changing any worktree.
 while IFS=$'\t' read -r order project _upstream branch base patch; do

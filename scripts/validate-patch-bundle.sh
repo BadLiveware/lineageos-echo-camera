@@ -44,6 +44,7 @@ while IFS=$'\t' read -r order project _upstream _branch base patch; do
 
   git -C "$worktree" apply --check "$bundle/$patch"
   git -C "$worktree" apply "$bundle/$patch"
+  git -C "$worktree" diff --check
   [[ -n $(git -C "$worktree" status --porcelain) ]] || {
     echo "$patch produced no changes" >&2
     exit 1
