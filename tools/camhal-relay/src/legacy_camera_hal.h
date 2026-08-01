@@ -159,6 +159,8 @@ struct camera_device {
 };
 
 #define CAMERA_DEVICE_API_VERSION_1_0 0x0100u
+#define CAMERA_MSG_ERROR 0x0001
+#define CAMERA_MSG_PREVIEW_FRAME 0x0010
 
 #ifdef __cplusplus
 }

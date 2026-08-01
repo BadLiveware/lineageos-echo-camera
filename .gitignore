@@ -1,8 +1,10 @@
-/backups/
-/build/
-/results/
-/vendor-blobs/
-/tools/
+/dist/
+/tools/camhal-relay/backups/
+/tools/camhal-relay/build/
+/tools/camhal-relay/results/
+/tools/camhal-relay/vendor-blobs/
 *.img
 *.tar
 *.so
+*.pyc
+__pycache__/
