@@ -22,7 +22,7 @@
 
   <project path="hardware/amazon" name="android_hardware_amazon" remote="amazon-oss"
            revision="03514731a4adef9fbca55a8a2fdf5a34d14ca9cc" />
-  <project path="hardware/mediatek/mt66xx" name="android_hardware_mediatek_mt66xx" remote="amazon-oss" />
+  <!-- Checkers uses MT76xx; the upstream MT66xx hardware repo is unpublished. -->
   <project path="hardware/mediatek/mt76xx" name="android_hardware_mediatek_mt76xx" remote="amazon-oss" />
 
   <project path="vendor/amazon/cronos" name="android_vendor_amazon_cronos" remote="amazon-oss" />
