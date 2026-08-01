@@ -48,6 +48,27 @@ Across levels 64-192, the mean absolute red/blue residual was 0.931 8-bit code v
 
 The level-32 red residual remains a known shadow-path limitation and was not compensated with AWB gain.
 
+## Camera modes and VACA motion detection
+
+The production Camera1 path accepted every tested low-resolution and fixed-frame-rate mode. Delivered rates were measured for five seconds after a 1.5-second settle period; each mode also returned a correctly sized NV21 frame with full luma range.
+
+| Requested mode | Accepted parameters | Frames | Delivered fps | Error from target |
+|---|---|---:|---:|---:|
+| 640×480 fixed 30, baseline | 640×480, 30–30 | 148 | 29.634 | −1.22% |
+| 640×480 fixed 10 | 640×480, 10–10 | 50 | 9.996 | −0.04% |
+| 320×240 variable 5–30 | 320×240, 5–30 | 150 | 30.002 | n/a |
+| 320×240 fixed 30 | 320×240, 30–30 | 148 | 29.629 | −1.24% |
+| 320×240 fixed 15 | 320×240, 15–15 | 75 | 15.012 | +0.08% |
+| 320×240 fixed 10 | 320×240, 10–10 | 50 | 10.015 | +0.15% |
+| 320×240 fixed 6 | 320×240, 6–6 | 30 | 6.000 | 0.00% |
+| 176×144 fixed 10 | 176×144, 10–10 | 50 | 10.003 | +0.03% |
+| 176×144 fixed 6 | 176×144, 6–6 | 30 | 5.999 | −0.02% |
+| 640×480 fixed 30, repeat | 640×480, 30–30 | 149 | 29.846 | −0.51% |
+
+VACA 0.12.1 motion detection was visually confirmed working through the production camera stack. CameraX selected an exact 320×240 YUV `ImageAnalysis` stream, and VACA processes at most one frame every 250 ms for an intended maximum analysis rate of approximately 4 fps.
+
+The motion-analysis input is correct, but the upstream camera path is not optimized for the same workload: the sensor uses 1280×720, the legacy HAL uses 640×360 with a 5–30 fps range and nominal 30 fps rate, and CameraX leaves its target frame-rate range unspecified. VACA therefore discards most upstream frames rather than reducing sensor and ISP work.
+
 ## Runtime health
 
 After deployment and reboot:
