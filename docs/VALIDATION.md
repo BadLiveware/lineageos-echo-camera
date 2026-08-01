@@ -50,10 +50,16 @@ The level-32 red residual remains a known shadow-path limitation and was not com
 
 ## Camera modes and VACA motion detection
 
-The production Camera1 path accepted every tested low-resolution and fixed-frame-rate mode. Delivered rates were measured for five seconds after a 1.5-second settle period; each mode also returned a correctly sized NV21 frame with full luma range.
+The production Camera1 path accepted every tested resolution and frame-rate mode, including the sensor-native 1280×720 output. Delivered rates were measured for five seconds after a 1.5-second settle period; each mode also returned a correctly sized NV21 frame with full luma range.
 
 | Requested mode | Accepted parameters | Frames | Delivered fps | Error from target |
 |---|---|---:|---:|---:|
+| 1280×720 fixed 30, baseline | 1280×720, 30–30 | 138 | 27.742 | −7.53% |
+| 1280×720 variable 5–30 | 1280×720, 5–30 | 140 | 28.083 | n/a |
+| 1280×720 fixed 15 | 1280×720, 15–15 | 74 | 14.805 | −1.30% |
+| 1280×720 fixed 10 | 1280×720, 10–10 | 50 | 9.997 | −0.03% |
+| 1280×720 fixed 6 | 1280×720, 6–6 | 30 | 6.008 | +0.13% |
+| 1280×720 fixed 30, repeat | 1280×720, 30–30 | 140 | 27.986 | −6.71% |
 | 640×480 fixed 30, baseline | 640×480, 30–30 | 148 | 29.634 | −1.22% |
 | 640×480 fixed 10 | 640×480, 10–10 | 50 | 9.996 | −0.04% |
 | 320×240 variable 5–30 | 320×240, 5–30 | 150 | 30.002 | n/a |
@@ -64,6 +70,8 @@ The production Camera1 path accepted every tested low-resolution and fixed-frame
 | 176×144 fixed 10 | 176×144, 10–10 | 50 | 10.003 | +0.03% |
 | 176×144 fixed 6 | 176×144, 6–6 | 30 | 5.999 | −0.02% |
 | 640×480 fixed 30, repeat | 640×480, 30–30 | 149 | 29.846 | −0.51% |
+
+At 1280×720, fixed 6, 10, and 15 fps requests delivered within 1.3% of target. Fixed 30 fps delivered 27.742–27.986 fps, 6.71–7.53% below target, so native-resolution operation is confirmed but exact 30 fps delivery is not.
 
 VACA 0.12.1 motion detection was visually confirmed working through the production camera stack. CameraX selected an exact 320×240 YUV `ImageAnalysis` stream, and VACA processes at most one frame every 250 ms for an intended maximum analysis rate of approximately 4 fps.
 
