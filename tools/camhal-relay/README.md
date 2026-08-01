@@ -20,7 +20,7 @@ adb pull /data/local/tmp/camprobe/frame-640x480.nv21 results/frame.nv21
 ffplay -f rawvideo -pixel_format nv21 -video_size 640x480 results/frame.nv21
 ```
 
-The build script reads `/system/vendor/lib/libdpframework.so` from the connected device so the compatibility shim links against the exact runtime library.
+The build script reads `/system/vendor/lib/libdpframework.so` from the connected device so the compatibility shim links against the exact runtime library. For an offline rebuild, set `CAMHAL_DP_LIBRARY` to a previously pulled exact copy.
 
 ## Run the bounded frame relay
 
