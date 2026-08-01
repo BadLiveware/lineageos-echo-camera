@@ -10,9 +10,26 @@ relay_socket=${CAMHAL_RELAY_SOCKET:-$remote/camrelay.sock}
 relay_port=${CAMHAL_RELAY_PORT:-57321}
 relay_seconds=${CAMHAL_RELAY_SECONDS:-20}
 relay_frames=${CAMHAL_RELAY_FRAMES:-120}
+case "$mode" in
+  enumerate|open|parameters|capture-one|relay|close) ;;
+  *)
+    echo "Unsupported camhal mode: $mode" >&2
+    exit 2
+    ;;
+esac
 timeout_seconds=25
 stamp=$(date +%Y%m%d-%H%M%S)
 log="$root/results/${mode}-${stamp}.log"
+
+# Invoked by the EXIT trap below.
+# shellcheck disable=SC2329
+cleanup_relay() {
+  if [[ "$mode" == relay ]]; then
+    adb forward --remove "tcp:$relay_port" >/dev/null 2>&1 || true
+    adb shell "rm -f '$relay_socket'" >/dev/null 2>&1 || true
+  fi
+}
+trap cleanup_relay EXIT
 
 mkdir -p "$root/results"
 "$root/scripts/build-camhal-host.sh"
@@ -67,8 +84,5 @@ adb shell "
 status=${PIPESTATUS[0]}
 set -e
 
-if [[ "$mode" == relay ]]; then
-  adb forward --remove "tcp:$relay_port" >/dev/null 2>&1 || true
-fi
 printf 'camhal host exit=%d log=%s\n' "$status" "$log" >&2
 exit "$status"

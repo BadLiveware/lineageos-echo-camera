@@ -848,11 +848,15 @@ static int relay_preview_frames(host_state_t *state, const char *socket_path,
             device->ops->preview_enabled ?
                 device->ops->preview_enabled(device) : -1);
 
-    return sent > 0 &&
-                   atomic_load_explicit(&capture.frame_status,
-                                        memory_order_acquire) >= 0
-               ? 0
-               : 66;
+    int frame_status = atomic_load_explicit(&capture.frame_status,
+                                             memory_order_acquire);
+    if (frame_status < 0 || sent != frame_limit) {
+        fprintf(stderr,
+                "[camhal] relay incomplete: delivered %u of %u requested frames\n",
+                sent, frame_limit);
+        return 66;
+    }
+    return 0;
 }
 
 static int close_camera(host_state_t *state) {
@@ -905,6 +909,13 @@ static void usage(const char *program) {
             program);
 }
 
+static int valid_mode(const char *mode) {
+    return strcmp(mode, "enumerate") == 0 || strcmp(mode, "open") == 0 ||
+           strcmp(mode, "parameters") == 0 ||
+           strcmp(mode, "capture-one") == 0 || strcmp(mode, "relay") == 0 ||
+           strcmp(mode, "close") == 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 2) {
         usage(argv[0]);
@@ -912,6 +923,10 @@ int main(int argc, char **argv) {
     }
 
     const char *mode = argv[1];
+    if (!valid_mode(mode)) {
+        usage(argv[0]);
+        return 2;
+    }
     const char *camera_id = argc > 2 ? argv[2] : "0";
     const char *hal_path = argc > 3 ? argv[3] : getenv("CAMERA_HAL_PATH");
     if (!hal_path || !*hal_path) {
@@ -951,14 +966,6 @@ int main(int argc, char **argv) {
     if (result == 0 && strcmp(mode, "close") == 0) {
         result = close_camera(&state);
     }
-    if (strcmp(mode, "enumerate") != 0 && strcmp(mode, "open") != 0 &&
-        strcmp(mode, "parameters") != 0 &&
-        strcmp(mode, "capture-one") != 0 && strcmp(mode, "relay") != 0 &&
-        strcmp(mode, "close") != 0) {
-        usage(argv[0]);
-        result = 2;
-    }
-
     fprintf(stderr, "[camhal] mode=%s result=%d; exiting without dlclose\n",
             mode, result);
     finish_without_unload(result);

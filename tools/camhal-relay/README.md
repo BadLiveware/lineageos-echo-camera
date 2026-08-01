@@ -24,7 +24,7 @@ The build script reads `/system/vendor/lib/libdpframework.so` from the connected
 
 ## Run the bounded frame relay
 
-Terminal 1 starts the HAL and creates an ADB forward. The defaults are 120 delivered frames, 20 seconds, and TCP port 57321.
+Terminal 1 starts the HAL and creates an ADB forward. By default it must deliver 120 frames before the 20-second deadline on TCP port 57321. Reaching the deadline with fewer frames is a failed run, so the producer and receiver cannot report contradictory success.
 
 ```bash
 CAMHAL_RELAY_FRAMES=120 \
@@ -42,7 +42,7 @@ Terminal 2 receives framed NV21 payloads:
   --output-dir results/relay
 ```
 
-The device keeps at most one partially transmitted frame. Socket writes are nonblocking; if the pending packet cannot advance, the next camera callback is dropped rather than blocking the HAL. `dropped_frames` in each header is cumulative and includes frames produced before a client connects.
+The device keeps at most one partially transmitted frame. Socket writes are nonblocking; if the pending packet cannot advance, the next camera callback is dropped rather than blocking the HAL. `dropped_frames` in each header is cumulative and includes frames produced before a client connects. Start the receiver promptly enough to meet the configured deadline.
 
 ### Relay wire format
 
@@ -85,7 +85,7 @@ Compare regulator snapshots rather than requiring every camera-named regulator t
 
 ## Stop and clean up
 
-Remove only relay runtime state:
+The runner removes its ADB forward and relay socket on normal exit, timeout, or shell interruption. If the runner itself is killed externally, remove only the relay runtime state manually:
 
 ```bash
 adb shell 'pkill -9 camhal_host 2>/dev/null || true; rm -f /data/local/tmp/camprobe/camrelay.sock'
