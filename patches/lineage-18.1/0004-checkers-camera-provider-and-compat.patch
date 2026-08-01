@@ -1,0 +1,1412 @@
+diff --git c/BoardConfig.mk i/BoardConfig.mk
+index dba21490dcdcac208e9342e52f91c146ec606e33..2754f8606ccf77a9196aff953c3a7e1830013ffb 100644
+--- c/BoardConfig.mk
++++ i/BoardConfig.mk
+@@ -11,9 +11,6 @@ BOARD_BLUETOOTH_BDROID_BUILDCFG_INCLUDE_DIR := $(DEVICE_PATH)/bluetooth
+ # Bootloader
+ TARGET_BOOTLOADER_BOARD_NAME := checkers
+ 
+-# HIDL
+-DEVICE_MANIFEST_FILE += $(DEVICE_PATH)/manifest_checkers.xml
+-
+ # Kernel
+ TARGET_KERNEL_CONFIG := checkers_defconfig
+ 
+@@ -27,6 +24,14 @@ BOARD_SYSTEMIMAGE_PARTITION_SIZE := 3253731328
+ # Properties
+ TARGET_VENDOR_PROP += $(DEVICE_PATH)/vendor.prop
+ 
++# Camera
++SOONG_CONFIG_NAMESPACES += amazonCamera
++SOONG_CONFIG_amazonCamera += mtk_preview_buffer
++SOONG_CONFIG_amazonCamera_mtk_preview_buffer := true
++
++# SELinux
++BOARD_VENDOR_SEPOLICY_DIRS += $(DEVICE_PATH)/sepolicy/vendor
++
+ # Sensors
+ BOARD_LIGHT_SENSOR_SUPPORT := true
+ 
+@@ -39,5 +44,10 @@ BOARD_HOSTAPD_PRIVATE_LIB := lib_driver_cmd_mtk
+ # Inherit from mt8163-common
+ include device/amazon/mt8163-common/BoardConfigCommon.mk
+ 
++# HIDL
++# Keep the device manifest last so its camera provider override replaces the
++# common internal provider declaration.
++DEVICE_MANIFEST_FILE += $(DEVICE_PATH)/manifest_checkers.xml
++
+ # Inherit the proprietary files
+ include vendor/amazon/checkers/BoardConfigVendor.mk
+diff --git c/camera/compat/Android.bp i/camera/compat/Android.bp
+new file mode 100644
+index 0000000000000000000000000000000000000000..5dae5634bcecdf25b3bfee03d615576f3c6fa2a3
+--- /dev/null
++++ i/camera/compat/Android.bp
+@@ -0,0 +1,20 @@
++cc_library_shared {
++    name: "libcheckers_dpframework_compat",
++    vendor: true,
++    compile_multilib: "32",
++    srcs: [
++        "camera_awb_compat.c",
++        "camera_mount_compat.c",
++        "dpframework_compat.c",
++    ],
++    cflags: [
++        "-Wall",
++        "-Wextra",
++        "-Werror",
++    ],
++    shared_libs: [
++        "libdl",
++        "liblog",
++    ],
++    stl: "none",
++}
+diff --git c/camera/compat/camera_awb_compat.c i/camera/compat/camera_awb_compat.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..ded2139efadcbb51cc59d29d0977c7834532c38b
+--- /dev/null
++++ i/camera/compat/camera_awb_compat.c
+@@ -0,0 +1,363 @@
++#define _GNU_SOURCE
++#include <android/log.h>
++#include <dlfcn.h>
++#include <elf.h>
++#include <errno.h>
++#include <link.h>
++#include <pthread.h>
++#include <stdbool.h>
++#include <stdint.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <sys/system_properties.h>
++#include <unistd.h>
++
++#define LOG_TAG "CheckersCameraAwb"
++#define AWB_GAIN_UNITY 512u
++#define AWB_GAIN_MIN 128u
++#define AWB_GAIN_MAX 4096u
++#define AWB_TRIM_MIN 128u
++#define AWB_TRIM_MAX 2048u
++#define AWB_COOL_BLUE_GAIN 640u
++#define AWB_WARM_BLUE_GAIN 835u
++#define AWB_PROPERTY_REFRESH_MASK 15u
++
++struct awb_gain {
++    uint32_t red;
++    uint32_t green;
++    uint32_t blue;
++};
++
++struct awb_trim_config {
++    uint32_t red_cool;
++    uint32_t blue_cool;
++    uint32_t red_warm;
++    uint32_t blue_warm;
++    uint32_t generation;
++    bool trace;
++};
++
++typedef int (*set_awb_gain_fn)(void *, struct awb_gain *);
++typedef int (*legacy_set_awb_gain_fn)(void *, int32_t, struct awb_gain *);
++
++static pthread_once_t g_hook_once = PTHREAD_ONCE_INIT;
++static pthread_mutex_t g_awb_lock = PTHREAD_MUTEX_INITIALIZER;
++static set_awb_gain_fn g_set_awb_gain;
++static legacy_set_awb_gain_fn g_legacy_set_awb_gain;
++static struct awb_trim_config g_trim = {
++    .red_cool = AWB_GAIN_UNITY,
++    .blue_cool = AWB_GAIN_UNITY,
++    .red_warm = AWB_GAIN_UNITY,
++    .blue_warm = AWB_GAIN_UNITY,
++    .generation = 1u,
++};
++static uint32_t g_calls;
++static bool g_logged_isp_gain;
++static bool g_logged_legacy_isp_gain;
++
++static int checkers_set_awb_gain(void *manager, struct awb_gain *gain);
++static int checkers_legacy_set_awb_gain(void *manager, int32_t sensor,
++                                        struct awb_gain *gain);
++
++static uint32_t read_trim_property(const char *name) {
++    char value[PROP_VALUE_MAX] = {0};
++    uint32_t parsed = 0u;
++
++    if (__system_property_get(name, value) <= 0) {
++        return AWB_GAIN_UNITY;
++    }
++    for (const char *cursor = value; *cursor; ++cursor) {
++        if (*cursor < '0' || *cursor > '9') {
++            return AWB_GAIN_UNITY;
++        }
++        parsed = parsed * 10u + (uint32_t)(*cursor - '0');
++        if (parsed > AWB_TRIM_MAX) {
++            return AWB_GAIN_UNITY;
++        }
++    }
++    return parsed >= AWB_TRIM_MIN ? parsed : AWB_GAIN_UNITY;
++}
++
++static bool read_bool_property(const char *name) {
++    char value[PROP_VALUE_MAX] = {0};
++    return __system_property_get(name, value) > 0 && value[0] == '1' &&
++           value[1] == '\0';
++}
++
++static void refresh_trim_config(void) {
++    struct awb_trim_config next = {
++        .red_cool = read_trim_property("persist.vendor.camera.awbtrim.r"),
++        .blue_cool = read_trim_property("persist.vendor.camera.awbtrim.b"),
++        .red_warm =
++            read_trim_property("persist.vendor.camera.awbtrim.r.warm"),
++        .blue_warm =
++            read_trim_property("persist.vendor.camera.awbtrim.b.warm"),
++        .generation = g_trim.generation,
++        .trace = read_bool_property("persist.vendor.camera.awbtrim.trace"),
++    };
++
++    bool changed = next.red_cool != g_trim.red_cool ||
++                   next.blue_cool != g_trim.blue_cool ||
++                   next.red_warm != g_trim.red_warm ||
++                   next.blue_warm != g_trim.blue_warm;
++    if (changed) {
++        ++next.generation;
++    }
++    if (changed || next.trace != g_trim.trace) {
++        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
++                            "trim cool=%u/%u warm=%u/%u generation=%u trace=%d",
++                            next.red_cool, next.blue_cool, next.red_warm,
++                            next.blue_warm, next.generation, next.trace);
++    }
++    g_trim = next;
++}
++
++static uint32_t interpolate_trim(uint32_t cool, uint32_t warm,
++                                 uint32_t normalized_blue) {
++    uint32_t warm_weight;
++    if (normalized_blue <= AWB_COOL_BLUE_GAIN) {
++        warm_weight = 0u;
++    } else if (normalized_blue >= AWB_WARM_BLUE_GAIN) {
++        warm_weight = 256u;
++    } else {
++        warm_weight = (normalized_blue - AWB_COOL_BLUE_GAIN) * 256u /
++                      (AWB_WARM_BLUE_GAIN - AWB_COOL_BLUE_GAIN);
++    }
++    return (cool * (256u - warm_weight) + warm * warm_weight) >> 8;
++}
++
++static bool trim_gain(const struct awb_gain *raw, struct awb_gain *written,
++                      uint32_t *red_trim, uint32_t *blue_trim) {
++    if (!raw || !written || raw->red < AWB_GAIN_MIN ||
++        raw->red > AWB_GAIN_MAX || raw->green < AWB_GAIN_MIN ||
++        raw->green > AWB_GAIN_MAX || raw->blue < AWB_GAIN_MIN ||
++        raw->blue > AWB_GAIN_MAX) {
++        return false;
++    }
++
++    uint32_t normalized_blue = raw->blue * AWB_GAIN_UNITY / raw->green;
++    *red_trim = interpolate_trim(g_trim.red_cool, g_trim.red_warm,
++                                 normalized_blue);
++    *blue_trim = interpolate_trim(g_trim.blue_cool, g_trim.blue_warm,
++                                  normalized_blue);
++    *written = (struct awb_gain){
++        .red = raw->red * *red_trim / AWB_GAIN_UNITY,
++        .green = raw->green,
++        .blue = raw->blue * *blue_trim / AWB_GAIN_UNITY,
++    };
++    return true;
++}
++
++struct plt_hook_request {
++    const char *library_name;
++    const char *target_symbol;
++    void *replacement;
++    void **original;
++    uint32_t patched;
++};
++
++static uintptr_t loaded_address(uintptr_t base, uintptr_t value) {
++    return value >= base ? value : base + value;
++}
++
++static int patch_plt_callback(struct dl_phdr_info *info, size_t size,
++                              void *opaque) {
++    (void)size;
++    struct plt_hook_request *request = opaque;
++    const char *name = strrchr(info->dlpi_name, '/');
++    name = name ? name + 1 : info->dlpi_name;
++    if (strcmp(name, request->library_name) != 0) {
++        return 0;
++    }
++
++    const ElfW(Dyn) *dynamic = NULL;
++    uintptr_t relro_start = 0u;
++    uintptr_t relro_end = 0u;
++    for (ElfW(Half) index = 0; index < info->dlpi_phnum; ++index) {
++        const ElfW(Phdr) *header = &info->dlpi_phdr[index];
++        if (header->p_type == PT_DYNAMIC) {
++            dynamic = (const ElfW(Dyn) *)(info->dlpi_addr + header->p_vaddr);
++        } else if (header->p_type == PT_GNU_RELRO) {
++            relro_start = info->dlpi_addr + header->p_vaddr;
++            relro_end = relro_start + header->p_memsz;
++        }
++    }
++    if (!dynamic) {
++        return 1;
++    }
++
++    const ElfW(Sym) *symbols = NULL;
++    const char *strings = NULL;
++    const ElfW(Rel) *relocations = NULL;
++    size_t relocation_bytes = 0u;
++    for (const ElfW(Dyn) *entry = dynamic; entry->d_tag != DT_NULL; ++entry) {
++        switch (entry->d_tag) {
++        case DT_SYMTAB:
++            symbols = (const ElfW(Sym) *)loaded_address(
++                info->dlpi_addr, entry->d_un.d_ptr);
++            break;
++        case DT_STRTAB:
++            strings = (const char *)loaded_address(info->dlpi_addr,
++                                                    entry->d_un.d_ptr);
++            break;
++        case DT_JMPREL:
++            relocations = (const ElfW(Rel) *)loaded_address(
++                info->dlpi_addr, entry->d_un.d_ptr);
++            break;
++        case DT_PLTRELSZ:
++            relocation_bytes = entry->d_un.d_val;
++            break;
++        default:
++            break;
++        }
++    }
++    if (!symbols || !strings || !relocations || !relocation_bytes) {
++        return 1;
++    }
++
++    long page_size = sysconf(_SC_PAGESIZE);
++    if (page_size <= 0) {
++        return 1;
++    }
++    size_t count = relocation_bytes / sizeof(*relocations);
++    for (size_t index = 0; index < count; ++index) {
++        uint32_t symbol_index = ELF32_R_SYM(relocations[index].r_info);
++        if (strcmp(strings + symbols[symbol_index].st_name,
++                   request->target_symbol) != 0) {
++            continue;
++        }
++
++        void **slot = (void **)loaded_address(info->dlpi_addr,
++                                               relocations[index].r_offset);
++        if (!*request->original && *slot != request->replacement) {
++            *request->original = *slot;
++        }
++        uintptr_t page = (uintptr_t)slot & ~((uintptr_t)page_size - 1u);
++        bool in_relro = (uintptr_t)slot >= relro_start &&
++                        (uintptr_t)slot < relro_end;
++        if (mprotect((void *)page, (size_t)page_size,
++                     PROT_READ | PROT_WRITE) != 0) {
++            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
++                                "unable to unlock PLT slot for %s: %s",
++                                request->target_symbol, strerror(errno));
++            continue;
++        }
++        *slot = request->replacement;
++        ++request->patched;
++        if (in_relro &&
++            mprotect((void *)page, (size_t)page_size, PROT_READ) != 0) {
++            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
++                                "unable to relock PLT slot for %s: %s",
++                                request->target_symbol, strerror(errno));
++        }
++    }
++    return 1;
++}
++
++static uint32_t patch_plt(const char *library_name, const char *target_symbol,
++                          void *replacement, void **original) {
++    struct plt_hook_request request = {
++        .library_name = library_name,
++        .target_symbol = target_symbol,
++        .replacement = replacement,
++        .original = original,
++    };
++    dl_iterate_phdr(patch_plt_callback, &request);
++    return request.patched;
++}
++
++static int checkers_set_awb_gain(void *manager, struct awb_gain *gain) {
++    if (!g_set_awb_gain || !gain) {
++        return g_set_awb_gain ? g_set_awb_gain(manager, gain) : -1;
++    }
++
++    struct awb_gain written = *gain;
++    uint32_t red_trim = AWB_GAIN_UNITY;
++    uint32_t blue_trim = AWB_GAIN_UNITY;
++    pthread_mutex_lock(&g_awb_lock);
++    if ((g_calls++ & AWB_PROPERTY_REFRESH_MASK) == 0u) {
++        refresh_trim_config();
++    }
++    bool valid = trim_gain(gain, &written, &red_trim, &blue_trim);
++    bool periodic_trace = g_trim.trace && (g_calls & 63u) == 1u;
++    if (valid && (!g_logged_isp_gain || periodic_trace)) {
++        g_logged_isp_gain = true;
++        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
++                            "ISP raw=%u/%u/%u trim=%u/%u output=%u/%u/%u",
++                            gain->red, gain->green, gain->blue, red_trim,
++                            blue_trim, written.red, written.green,
++                            written.blue);
++    }
++    pthread_mutex_unlock(&g_awb_lock);
++
++    return g_set_awb_gain(manager, valid ? &written : gain);
++}
++
++static int checkers_legacy_set_awb_gain(void *manager, int32_t sensor,
++                                        struct awb_gain *gain) {
++    if (!g_legacy_set_awb_gain || !gain) {
++        return g_legacy_set_awb_gain
++            ? g_legacy_set_awb_gain(manager, sensor, gain)
++            : -1;
++    }
++
++    struct awb_gain written = *gain;
++    uint32_t red_trim = AWB_GAIN_UNITY;
++    uint32_t blue_trim = AWB_GAIN_UNITY;
++    pthread_mutex_lock(&g_awb_lock);
++    if ((g_calls++ & AWB_PROPERTY_REFRESH_MASK) == 0u) {
++        refresh_trim_config();
++    }
++    bool valid = trim_gain(gain, &written, &red_trim, &blue_trim);
++    bool periodic_trace = g_trim.trace && (g_calls & 63u) == 1u;
++    if (valid && (!g_logged_legacy_isp_gain || periodic_trace)) {
++        g_logged_legacy_isp_gain = true;
++        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
++                            "legacy ISP sensor=%d raw=%u/%u/%u trim=%u/%u output=%u/%u/%u",
++                            sensor, gain->red, gain->green, gain->blue,
++                            red_trim, blue_trim, written.red, written.green,
++                            written.blue);
++    }
++    pthread_mutex_unlock(&g_awb_lock);
++
++    return g_legacy_set_awb_gain(manager, sensor, valid ? &written : gain);
++}
++
++static void install_awb_hooks_once(void) {
++    static const char set_gain_symbol[] =
++        "_ZN13NSIspTuningv312IspTuningMgr10setAWBGainER10AWB_GAIN_T";
++    static const char legacy_set_gain_symbol[] =
++        "_ZN11NSIspTuning12IspTuningMgr10setAWBGainEiR10AWB_GAIN_T";
++
++    void *hal3a = dlopen("libcam.hal3a.v3.so", RTLD_NOW | RTLD_LOCAL);
++    uint32_t isp_hooks = hal3a
++        ? patch_plt("libcam.hal3a.v3.so", set_gain_symbol,
++                    (void *)(uintptr_t)checkers_set_awb_gain,
++                    (void **)&g_set_awb_gain)
++        : 0u;
++
++    void *featureio = dlopen("libfeatureio.so", RTLD_NOW | RTLD_LOCAL);
++    uint32_t legacy_hooks = featureio
++        ? patch_plt("libfeatureio.so", legacy_set_gain_symbol,
++                    (void *)(uintptr_t)checkers_legacy_set_awb_gain,
++                    (void **)&g_legacy_set_awb_gain)
++        : 0u;
++
++    if (isp_hooks || legacy_hooks) {
++        __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
++                            "installed AWB ISP hooks v3=%u legacy=%u with unity defaults",
++                            isp_hooks, legacy_hooks);
++    } else {
++        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
++                            "no supported AWB ISP gain calls found");
++    }
++}
++
++void checkers_install_awb_hook(void) {
++    pthread_once(&g_hook_once, install_awb_hooks_once);
++}
++
++__attribute__((constructor))
++static void initialize_awb_hook(void) {
++    checkers_install_awb_hook();
++}
+diff --git c/camera/compat/camera_mount_compat.c i/camera/compat/camera_mount_compat.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..5b7342a05daa816ccdcec558095fe8f0007aaf0d
+--- /dev/null
++++ i/camera/compat/camera_mount_compat.c
+@@ -0,0 +1,117 @@
++#include <android/log.h>
++#include <dlfcn.h>
++#include <pthread.h>
++#include <stdbool.h>
++#include <stdint.h>
++
++#define LOG_TAG "CheckersCameraMount"
++#define CHECKERS_CAMERA_ORIENTATION 0
++#define CHECKERS_CAPTURE_ROTATION 180
++#define CHECKERS_CAPTURE_FLIP 1
++
++/* camera_info begins with facing and orientation on every camera module API
++ * version used by the legacy adapter. Keeping only the stable prefix avoids a
++ * dependency on framework-private camera headers in this vendor interposer. */
++struct camera_info_prefix {
++    int facing;
++    int orientation;
++};
++
++typedef int (*get_camera_info_fn)(void *, int, void *);
++
++static pthread_once_t g_camera_module_once = PTHREAD_ONCE_INIT;
++static get_camera_info_fn g_get_camera_info;
++
++void checkers_install_awb_hook(void);
++
++static void resolve_camera_module(void) {
++    checkers_install_awb_hook();
++    const char *symbol =
++        "_ZN7android8hardware6camera6common4V1_06helper12CameraModule13getCameraInfoEiP11camera_info";
++    void *implementation = dlopen(
++        "/vendor/lib/hw/android.hardware.camera.provider@2.4-impl-legacy.so",
++        RTLD_NOW | RTLD_LOCAL);
++    if (implementation) {
++        g_get_camera_info = (get_camera_info_fn)dlsym(implementation, symbol);
++    }
++    if (!g_get_camera_info) {
++        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
++                            "unable to resolve CameraModule::getCameraInfo: %s",
++                            dlerror());
++    }
++}
++
++__attribute__((visibility("default")))
++int camera_module_get_info(void *module, int camera_id, void *opaque_info)
++    __asm__("_ZN7android8hardware6camera6common4V1_06helper12CameraModule13getCameraInfoEiP11camera_info");
++
++int camera_module_get_info(void *module, int camera_id, void *opaque_info) {
++    pthread_once(&g_camera_module_once, resolve_camera_module);
++    if (!g_get_camera_info) {
++        return -1;
++    }
++
++    int result = g_get_camera_info(module, camera_id, opaque_info);
++    if (result == 0 && opaque_info) {
++        struct camera_info_prefix *info = opaque_info;
++        int previous = info->orientation;
++        info->orientation = CHECKERS_CAMERA_ORIENTATION;
++
++        static bool override_logged;
++        if (!__atomic_exchange_n(&override_logged, true, __ATOMIC_RELAXED)) {
++            __android_log_print(ANDROID_LOG_INFO, LOG_TAG,
++                                "camera orientation %d -> %d", previous,
++                                CHECKERS_CAMERA_ORIENTATION);
++        }
++    }
++    return result;
++}
++
++typedef int (*camshot_transform_fn)(void *, uint32_t);
++
++static pthread_once_t g_camshot_once = PTHREAD_ONCE_INIT;
++static camshot_transform_fn g_camshot_set_rotation;
++static camshot_transform_fn g_camshot_set_flip;
++
++static void resolve_camshot(void) {
++    void *camshot = dlopen("libcam.camshot.so", RTLD_NOW | RTLD_LOCAL);
++    if (!camshot) {
++        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
++                            "unable to open libcam.camshot.so: %s", dlerror());
++        return;
++    }
++
++    g_camshot_set_rotation = (camshot_transform_fn)dlsym(
++        camshot, "_ZN9NSCamShot7SImager11setRotationEj");
++    g_camshot_set_flip = (camshot_transform_fn)dlsym(
++        camshot, "_ZN9NSCamShot7SImager7setFlipEj");
++    if (!g_camshot_set_rotation || !g_camshot_set_flip) {
++        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
++                            "unable to resolve capture transforms: %s",
++                            dlerror());
++    }
++}
++
++__attribute__((visibility("default")))
++int camshot_set_rotation(void *imager, uint32_t rotation)
++    __asm__("_ZN9NSCamShot7SImager11setRotationEj");
++
++int camshot_set_rotation(void *imager, uint32_t rotation) {
++    (void)rotation;
++    pthread_once(&g_camshot_once, resolve_camshot);
++    return g_camshot_set_rotation
++        ? g_camshot_set_rotation(imager, CHECKERS_CAPTURE_ROTATION)
++        : 0;
++}
++
++__attribute__((visibility("default")))
++int camshot_set_flip(void *imager, uint32_t flip)
++    __asm__("_ZN9NSCamShot7SImager7setFlipEj");
++
++int camshot_set_flip(void *imager, uint32_t flip) {
++    (void)flip;
++    pthread_once(&g_camshot_once, resolve_camshot);
++    return g_camshot_set_flip
++        ? g_camshot_set_flip(imager, CHECKERS_CAPTURE_FLIP)
++        : 0;
++}
+diff --git c/camera/compat/dpframework_compat.c i/camera/compat/dpframework_compat.c
+new file mode 100644
+index 0000000000000000000000000000000000000000..9ca37486bb6771efd39685abd8ccb2988180ccd4
+--- /dev/null
++++ i/camera/compat/dpframework_compat.c
+@@ -0,0 +1,602 @@
++#include <android/log.h>
++#include <dlfcn.h>
++#include <pthread.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdint.h>
++#include <stdlib.h>
++#include <sys/time.h>
++
++/*
++ * Android 7 camera objects embed DpIspStream and DpBlitStream using their old
++ * class sizes, while Android 9's kernel-compatible libdpframework expects much
++ * larger objects. Calling the newer constructor on the old allocation writes
++ * beyond it. Route every Dp method used by the camera blobs to separately
++ * allocated Android 9 objects held in an external registry; the old blobs also
++ * write their own fields, so the association cannot live inside the object.
++ */
++
++#define DP_PROXY_BYTES (64u * 1024u)
++#define DP_SECURE_NONE 0
++
++typedef int32_t dp_status_t;
++
++/* Android 9 repacked DpColorFormat's video/plane/subsampling fields. */
++static int32_t translate_color(int32_t legacy_color) {
++    uint32_t legacy = (uint32_t)legacy_color;
++    uint32_t video = (legacy >> 27) & 0x7u;
++    uint32_t planes = (legacy >> 24) & 0x7u;
++    uint32_t horizontal = (legacy >> 20) & 0x3u;
++    uint32_t vertical = (legacy >> 18) & 0x3u;
++    uint32_t translated = (video << 23) | (planes << 21) |
++                          (horizontal << 19) | ((vertical & 0x1u) << 18) |
++                          (legacy & 0x3ffffu);
++
++    uint32_t group = (legacy >> 6) & 0x3u;
++    uint32_t unique = legacy & 0x1fu;
++    if (group == 2u && unique >= 20u && unique <= 22u) {
++        translated = (translated & ~0x1fu) | 20u;
++    } else if (group == 3u) {
++        translated = (translated & ~(0x3u << 6)) | (2u << 6);
++        if (unique >= 20u && unique <= 22u) {
++            translated = (translated & ~0x1fu) | 21u;
++        }
++    }
++    return (int32_t)translated;
++}
++
++typedef struct proxy_entry {
++    void *legacy;
++    void *current;
++    const char *destructor;
++    size_t users;
++    bool destroying;
++    struct proxy_entry *next;
++} proxy_entry_t;
++
++static pthread_mutex_t g_proxy_lock = PTHREAD_MUTEX_INITIALIZER;
++static proxy_entry_t *g_proxies;
++static pthread_once_t g_dpframework_once = PTHREAD_ONCE_INIT;
++static void *g_dpframework;
++
++static void destroy_current(void *object, const char *destructor);
++
++static bool register_proxy(void *legacy, void *current) {
++    proxy_entry_t *entry = calloc(1, sizeof(*entry));
++    if (!entry) {
++        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
++                            "unable to allocate Dp proxy registry entry");
++        return false;
++    }
++    entry->legacy = legacy;
++    entry->current = current;
++
++    pthread_mutex_lock(&g_proxy_lock);
++    for (proxy_entry_t *existing = g_proxies; existing;
++         existing = existing->next) {
++        if (existing->legacy == legacy) {
++            pthread_mutex_unlock(&g_proxy_lock);
++            free(entry);
++            __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
++                                "duplicate Dp proxy for legacy object %p",
++                                legacy);
++            return false;
++        }
++    }
++    entry->next = g_proxies;
++    g_proxies = entry;
++    pthread_mutex_unlock(&g_proxy_lock);
++    return true;
++}
++
++static void *acquire_proxy(void *legacy) {
++    void *current = NULL;
++    pthread_mutex_lock(&g_proxy_lock);
++    for (proxy_entry_t *entry = g_proxies; entry; entry = entry->next) {
++        if (entry->legacy == legacy && !entry->destroying) {
++            ++entry->users;
++            current = entry->current;
++            break;
++        }
++    }
++    pthread_mutex_unlock(&g_proxy_lock);
++    return current;
++}
++
++static void release_proxy(void *legacy) {
++    proxy_entry_t *removed = NULL;
++    pthread_mutex_lock(&g_proxy_lock);
++    proxy_entry_t **link = &g_proxies;
++    while (*link) {
++        proxy_entry_t *entry = *link;
++        if (entry->legacy == legacy) {
++            if (entry->users > 0) {
++                --entry->users;
++            }
++            if (entry->destroying && entry->users == 0) {
++                *link = entry->next;
++                removed = entry;
++            }
++            break;
++        }
++        link = &entry->next;
++    }
++    pthread_mutex_unlock(&g_proxy_lock);
++    if (removed) {
++        destroy_current(removed->current, removed->destructor);
++        free(removed);
++    }
++}
++
++static void unregister_proxy(void *legacy, const char *destructor) {
++    proxy_entry_t *removed = NULL;
++    pthread_mutex_lock(&g_proxy_lock);
++    proxy_entry_t **link = &g_proxies;
++    while (*link) {
++        proxy_entry_t *entry = *link;
++        if (entry->legacy == legacy) {
++            if (!entry->destroying) {
++                entry->destroying = true;
++                entry->destructor = destructor;
++                if (entry->users == 0) {
++                    *link = entry->next;
++                    removed = entry;
++                }
++            }
++            break;
++        }
++        link = &entry->next;
++    }
++    pthread_mutex_unlock(&g_proxy_lock);
++    if (removed) {
++        destroy_current(removed->current, removed->destructor);
++        free(removed);
++    }
++}
++
++static void open_dpframework(void) {
++    g_dpframework = dlopen("libdpframework.so", RTLD_NOW | RTLD_LOCAL);
++    if (!g_dpframework) {
++        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
++                            "unable to open libdpframework.so: %s", dlerror());
++    }
++}
++
++static void *resolve_next(const char *symbol) {
++    dlerror();
++    void *function = dlsym(RTLD_NEXT, symbol);
++    if (function) {
++        return function;
++    }
++
++    /*
++     * Android's linker can place an LD_PRELOAD interposer and the vendor
++     * dependency it wraps in different lookup groups. RTLD_NEXT then stops
++     * before libdpframework even though the symbol is exported there. Resolve
++     * against the dependency's own handle to bypass only this interposer.
++     */
++    pthread_once(&g_dpframework_once, open_dpframework);
++    if (g_dpframework) {
++        dlerror();
++        function = dlsym(g_dpframework, symbol);
++        if (function) {
++            return function;
++        }
++    }
++
++    const char *error = dlerror();
++    __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
++                        "missing wrapped symbol %s: %s", symbol,
++                        error ? error : "unknown dynamic linker error");
++    return NULL;
++}
++
++static void destroy_current(void *object, const char *destructor) {
++    typedef void (*destructor_fn)(void *);
++    destructor_fn function = (destructor_fn)resolve_next(destructor);
++    if (function) {
++        function(object);
++    }
++    free(object);
++}
++
++static void construct_proxy(void *legacy_object, const char *constructor,
++                            int has_argument, int32_t argument) {
++    if (!legacy_object) {
++        return;
++    }
++    void *object = calloc(1, DP_PROXY_BYTES);
++    if (!object) {
++        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
++                            "unable to allocate Dp proxy object");
++        return;
++    }
++
++    void *function = resolve_next(constructor);
++    if (!function || !register_proxy(legacy_object, object)) {
++        free(object);
++        return;
++    }
++
++    if (has_argument) {
++        typedef void (*constructor_fn)(void *, int32_t);
++        ((constructor_fn)function)(object, argument);
++    } else {
++        typedef void (*constructor_fn)(void *);
++        ((constructor_fn)function)(object);
++    }
++    if (has_argument) {
++        __android_log_print(ANDROID_LOG_INFO, "CheckersDpCompat",
++                            "constructed ISP proxy legacy=%p current=%p type=%d",
++                            legacy_object, object, argument);
++    }
++}
++
++static void destroy_proxy(void *legacy_object, const char *destructor) {
++    unregister_proxy(legacy_object, destructor);
++}
++
++#define REQUIRE_PROXY(legacy)                                      \
++    void *legacy_proxy = (void *)(legacy);                         \
++    void *current = acquire_proxy(legacy_proxy);                    \
++    if (!current) {                                                \
++        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat", \
++                            "%s missing proxy for legacy object %p", \
++                            __func__, legacy_proxy);                \
++        return -1;                                                 \
++    }
++
++#define RESOLVE_AND_CALL(symbol, type, ...)                            \
++    do {                                                               \
++        type function = (type)resolve_next(symbol);                    \
++        if (!function) {                                               \
++            release_proxy(legacy_proxy);                               \
++            return -1;                                                 \
++        }                                                              \
++        dp_status_t call_result = function(__VA_ARGS__);               \
++        release_proxy(legacy_proxy);                                   \
++        static bool failure_logged;                                    \
++        if (call_result != 0 &&                                        \
++                !__atomic_exchange_n(&failure_logged, true,             \
++                                     __ATOMIC_RELAXED))                 \
++            __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat", \
++                                "%s returned %d", __func__,           \
++                                call_result);                           \
++        return call_result;                                            \
++    } while (0)
++
++__attribute__((visibility("default")))
++void *isp_ctor(void *stream, int32_t stream_type)
++    __asm__("_ZN11DpIspStreamC1ENS_13ISPStreamTypeE");
++void *isp_ctor(void *stream, int32_t stream_type) {
++    construct_proxy(stream, "_ZN11DpIspStreamC1ENS_13ISPStreamTypeE", 1,
++                    stream_type);
++    return stream;
++}
++
++__attribute__((visibility("default")))
++void isp_dtor(void *stream) __asm__("_ZN11DpIspStreamD1Ev");
++void isp_dtor(void *stream) {
++    destroy_proxy(stream, "_ZN11DpIspStreamD1Ev");
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_set_src_crop(void *stream, int32_t x, int32_t sub_x,
++                             int32_t y, int32_t sub_y, int32_t width,
++                             int32_t height)
++    __asm__("_ZN11DpIspStream10setSrcCropEiiiiii");
++dp_status_t isp_set_src_crop(void *stream, int32_t x, int32_t sub_x,
++                             int32_t y, int32_t sub_y, int32_t width,
++                             int32_t height) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t, int32_t, int32_t,
++                              int32_t, int32_t);
++    RESOLVE_AND_CALL("_ZN11DpIspStream10setSrcCropEiiiiii", fn, current, x,
++                     sub_x, y, sub_y, width, height);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_stop(void *stream) __asm__("_ZN11DpIspStream10stopStreamEv");
++dp_status_t isp_stop(void *stream) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *);
++    RESOLVE_AND_CALL("_ZN11DpIspStream10stopStreamEv", fn, current);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_rotation(void *stream, int32_t port, int32_t rotation)
++    __asm__("_ZN11DpIspStream11setRotationEii");
++dp_status_t isp_rotation(void *stream, int32_t port, int32_t rotation) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t);
++    /* The Checkers sensor is mounted upside down. Only destination port 0
++     * accepts rotation and owns the live preview; rotating port 1 makes the
++     * Android 9 Dp implementation reject the whole stream with -EINVAL. */
++    int32_t adjusted_rotation = port == 0 ? (rotation + 180) % 360 : rotation;
++    RESOLVE_AND_CALL("_ZN11DpIspStream11setRotationEii", fn, current, port,
++                     adjusted_rotation);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_start(void *stream) __asm__("_ZN11DpIspStream11startStreamEv");
++dp_status_t isp_start(void *stream) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, struct timeval *);
++    struct timeval timing = {0};
++    RESOLVE_AND_CALL("_ZN11DpIspStream11startStreamEP7timeval", fn, current,
++                     &timing);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_set_dst(void *stream, int32_t port, int32_t width,
++                        int32_t height, int32_t y_pitch, int32_t uv_pitch,
++                        int32_t color, int32_t profile, int32_t field,
++                        void *roi, bool do_flush)
++    __asm__("_ZN11DpIspStream12setDstConfigEiiiii13DP_COLOR_ENUM15DP_PROFILE_ENUM17DpInterlaceFormatP6DpRectb");
++dp_status_t isp_set_dst(void *stream, int32_t port, int32_t width,
++                        int32_t height, int32_t y_pitch, int32_t uv_pitch,
++                        int32_t color, int32_t profile, int32_t field,
++                        void *roi, bool do_flush) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t, int32_t, int32_t,
++                              int32_t, int32_t, int32_t, int32_t, void *, bool,
++                              int32_t);
++    RESOLVE_AND_CALL(
++        "_ZN11DpIspStream12setDstConfigEiiiii13DP_COLOR_ENUM15DP_PROFILE_ENUM17DpInterlaceFormatP6DpRectb8DpSecure",
++        fn, current, port, width, height, y_pitch, uv_pitch,
++        translate_color(color), profile, field, roi, do_flush, DP_SECURE_NONE);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_set_parameter(void *stream, void *config, uint32_t hint)
++    __asm__("_ZN11DpIspStream12setParameterER23ISP_TPIPE_CONFIG_STRUCTj");
++dp_status_t isp_set_parameter(void *stream, void *config, uint32_t hint) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void *, uint32_t);
++    RESOLVE_AND_CALL(
++        "_ZN11DpIspStream12setParameterER23ISP_TPIPE_CONFIG_STRUCTj", fn,
++        current, config, hint);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_set_src_short(void *stream, int32_t color, int32_t width,
++                              int32_t height, int32_t pitch, bool do_flush)
++    __asm__("_ZN11DpIspStream12setSrcConfigE13DP_COLOR_ENUMiiib");
++dp_status_t isp_set_src_short(void *stream, int32_t color, int32_t width,
++                              int32_t height, int32_t pitch, bool do_flush) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t, int32_t, int32_t,
++                              bool);
++    RESOLVE_AND_CALL("_ZN11DpIspStream12setSrcConfigE13DP_COLOR_ENUMiiib", fn,
++                     current, translate_color(color), width, height, pitch,
++                     do_flush);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_set_src(void *stream, int32_t width, int32_t height,
++                        int32_t y_pitch, int32_t uv_pitch, int32_t color,
++                        int32_t profile, int32_t field, void *roi,
++                        bool do_flush)
++    __asm__("_ZN11DpIspStream12setSrcConfigEiiii13DP_COLOR_ENUM15DP_PROFILE_ENUM17DpInterlaceFormatP6DpRectb");
++dp_status_t isp_set_src(void *stream, int32_t width, int32_t height,
++                        int32_t y_pitch, int32_t uv_pitch, int32_t color,
++                        int32_t profile, int32_t field, void *roi,
++                        bool do_flush) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t, int32_t, int32_t,
++                              int32_t, int32_t, int32_t, void *, bool,
++                              int32_t);
++    RESOLVE_AND_CALL(
++        "_ZN11DpIspStream12setSrcConfigEiiii13DP_COLOR_ENUM15DP_PROFILE_ENUM17DpInterlaceFormatP6DpRectb8DpSecure",
++        fn, current, width, height, y_pitch, uv_pitch, translate_color(color),
++        profile, field, roi, do_flush, DP_SECURE_NONE);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_flip(void *stream, int32_t port, bool flip)
++    __asm__("_ZN11DpIspStream13setFlipStatusEib");
++dp_status_t isp_flip(void *stream, int32_t port, bool flip) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, bool);
++    RESOLVE_AND_CALL("_ZN11DpIspStream13setFlipStatusEib", fn, current, port,
++                     flip);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_queue_dst(void *stream, int32_t port, void **addresses,
++                          uint32_t *mvas, uint32_t *sizes, int32_t planes)
++    __asm__("_ZN11DpIspStream14queueDstBufferEiPPvPjS2_i");
++dp_status_t isp_queue_dst(void *stream, int32_t port, void **addresses,
++                          uint32_t *mvas, uint32_t *sizes, int32_t planes) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, void **, uint32_t *, uint32_t *,
++                              int32_t);
++    RESOLVE_AND_CALL("_ZN11DpIspStream14queueDstBufferEiPPvPjS2_i", fn,
++                     current, port, addresses, mvas, sizes, planes);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_queue_src_planes(void *stream, void **addresses,
++                                 uint32_t *mvas, uint32_t *sizes,
++                                 int32_t planes)
++    __asm__("_ZN11DpIspStream14queueSrcBufferEPPvPjS2_i");
++dp_status_t isp_queue_src_planes(void *stream, void **addresses,
++                                 uint32_t *mvas, uint32_t *sizes,
++                                 int32_t planes) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void **, uint32_t *, uint32_t *, int32_t);
++    RESOLVE_AND_CALL("_ZN11DpIspStream14queueSrcBufferEPPvPjS2_i", fn,
++                     current, addresses, mvas, sizes, planes);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_queue_src(void *stream, void *address, uint32_t mva,
++                          uint32_t size)
++    __asm__("_ZN11DpIspStream14queueSrcBufferEPvjj");
++dp_status_t isp_queue_src(void *stream, void *address, uint32_t mva,
++                          uint32_t size) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void *, uint32_t, uint32_t);
++    RESOLVE_AND_CALL("_ZN11DpIspStream14queueSrcBufferEPvjj", fn, current,
++                     address, mva, size);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_dequeue_end(void *stream, uint32_t *job_id)
++    __asm__("_ZN11DpIspStream15dequeueFrameEndEPj");
++dp_status_t isp_dequeue_end(void *stream, uint32_t *job_id) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, uint32_t *);
++    RESOLVE_AND_CALL("_ZN11DpIspStream15dequeueFrameEndEPj", fn, current,
++                     job_id);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_dequeue_dst(void *stream, int32_t port, void **address,
++                            bool wait)
++    __asm__("_ZN11DpIspStream16dequeueDstBufferEiPPvb");
++dp_status_t isp_dequeue_dst(void *stream, int32_t port, void **address,
++                            bool wait) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, void **, bool);
++    RESOLVE_AND_CALL("_ZN11DpIspStream16dequeueDstBufferEiPPvb", fn, current,
++                     port, address, wait);
++}
++
++__attribute__((visibility("default")))
++dp_status_t isp_dequeue_src(void *stream)
++    __asm__("_ZN11DpIspStream16dequeueSrcBufferEv");
++dp_status_t isp_dequeue_src(void *stream) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *);
++    RESOLVE_AND_CALL("_ZN11DpIspStream16dequeueSrcBufferEv", fn, current);
++}
++
++__attribute__((visibility("default")))
++void *blit_ctor(void *stream) __asm__("_ZN12DpBlitStreamC1Ev");
++void *blit_ctor(void *stream) {
++    construct_proxy(stream, "_ZN12DpBlitStreamC1Ev", 0, 0);
++    return stream;
++}
++
++__attribute__((visibility("default")))
++void blit_dtor(void *stream) __asm__("_ZN12DpBlitStreamD1Ev");
++void blit_dtor(void *stream) {
++    destroy_proxy(stream, "_ZN12DpBlitStreamD1Ev");
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_invalidate(void *stream)
++    __asm__("_ZN12DpBlitStream10invalidateEv");
++dp_status_t blit_invalidate(void *stream) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void *);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream10invalidateEP7timeval", fn, current,
++                     NULL);
++}
++
++#define DEFINE_BLIT_BUFFER_WRAPPER(c_name, symbol, signature, arguments) \
++    __attribute__((visibility("default")))                              \
++    dp_status_t c_name signature __asm__(symbol);                        \
++    dp_status_t c_name signature {                                      \
++        REQUIRE_PROXY(stream);                                          \
++        typedef dp_status_t (*fn) signature;                            \
++        RESOLVE_AND_CALL(symbol, fn, arguments);                        \
++    }
++
++/* These explicit wrappers keep the ABI signatures reviewable. */
++__attribute__((visibility("default")))
++dp_status_t blit_set_dst_fd(void *stream, int32_t fd, uint32_t *sizes,
++                            uint32_t planes)
++    __asm__("_ZN12DpBlitStream12setDstBufferEiPjj");
++dp_status_t blit_set_dst_fd(void *stream, int32_t fd, uint32_t *sizes,
++                            uint32_t planes) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, uint32_t *, uint32_t);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream12setDstBufferEiPjj", fn, current, fd,
++                     sizes, planes);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_dst_planes(void *stream, void **addresses,
++                                uint32_t *sizes, uint32_t planes)
++    __asm__("_ZN12DpBlitStream12setDstBufferEPPvPjj");
++dp_status_t blit_set_dst_planes(void *stream, void **addresses,
++                                uint32_t *sizes, uint32_t planes) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void **, uint32_t *, uint32_t);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream12setDstBufferEPPvPjj", fn, current,
++                     addresses, sizes, planes);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_dst(void *stream, void *address, uint32_t size)
++    __asm__("_ZN12DpBlitStream12setDstBufferEPvj");
++dp_status_t blit_set_dst(void *stream, void *address, uint32_t size) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void *, uint32_t);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream12setDstBufferEPvj", fn, current,
++                     address, size);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_dst_config(void *stream, int32_t width, int32_t height,
++                                int32_t color, int32_t field, void *roi)
++    __asm__("_ZN12DpBlitStream12setDstConfigEii13DP_COLOR_ENUM17DpInterlaceFormatP6DpRect");
++dp_status_t blit_set_dst_config(void *stream, int32_t width, int32_t height,
++                                int32_t color, int32_t field, void *roi) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t, int32_t, int32_t,
++                              void *);
++    RESOLVE_AND_CALL(
++        "_ZN12DpBlitStream12setDstConfigEii13DP_COLOR_ENUM17DpInterlaceFormatP6DpRect",
++        fn, current, width, height, translate_color(color), field, roi);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_src_fd(void *stream, int32_t fd, uint32_t *sizes,
++                            uint32_t planes)
++    __asm__("_ZN12DpBlitStream12setSrcBufferEiPjj");
++dp_status_t blit_set_src_fd(void *stream, int32_t fd, uint32_t *sizes,
++                            uint32_t planes) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, uint32_t *, uint32_t);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream12setSrcBufferEiPjj", fn, current, fd,
++                     sizes, planes);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_src_planes(void *stream, void **addresses,
++                                uint32_t *sizes, uint32_t planes)
++    __asm__("_ZN12DpBlitStream12setSrcBufferEPPvPjj");
++dp_status_t blit_set_src_planes(void *stream, void **addresses,
++                                uint32_t *sizes, uint32_t planes) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void **, uint32_t *, uint32_t);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream12setSrcBufferEPPvPjj", fn, current,
++                     addresses, sizes, planes);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_src(void *stream, void *address, uint32_t size)
++    __asm__("_ZN12DpBlitStream12setSrcBufferEPvj");
++dp_status_t blit_set_src(void *stream, void *address, uint32_t size) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, void *, uint32_t);
++    RESOLVE_AND_CALL("_ZN12DpBlitStream12setSrcBufferEPvj", fn, current,
++                     address, size);
++}
++
++__attribute__((visibility("default")))
++dp_status_t blit_set_src_config(void *stream, int32_t width, int32_t height,
++                                int32_t color, int32_t field, void *roi)
++    __asm__("_ZN12DpBlitStream12setSrcConfigEii13DP_COLOR_ENUM17DpInterlaceFormatP6DpRect");
++dp_status_t blit_set_src_config(void *stream, int32_t width, int32_t height,
++                                int32_t color, int32_t field, void *roi) {
++    REQUIRE_PROXY(stream);
++    typedef dp_status_t (*fn)(void *, int32_t, int32_t, int32_t, int32_t,
++                              void *);
++    RESOLVE_AND_CALL(
++        "_ZN12DpBlitStream12setSrcConfigEii13DP_COLOR_ENUM17DpInterlaceFormatP6DpRect",
++        fn, current, width, height, translate_color(color), field, roi);
++}
+diff --git c/camera/provider/Android.bp i/camera/provider/Android.bp
+new file mode 100644
+index 0000000000000000000000000000000000000000..4268bd9b8304261e69bbf767ac9030c856db296e
+--- /dev/null
++++ i/camera/provider/Android.bp
+@@ -0,0 +1,23 @@
++cc_binary {
++    name: "android.hardware.camera.provider@2.4-service.checkers",
++    defaults: ["hidl_defaults"],
++    proprietary: true,
++    relative_install_path: "hw",
++    compile_multilib: "32",
++    srcs: ["service.cpp"],
++    init_rc: ["android.hardware.camera.provider@2.4-service.checkers.rc"],
++    required: [
++        "android.hardware.camera.provider@2.4-impl-legacy",
++        "camera.device@1.0-impl-legacy",
++        "libcheckers_dpframework_compat",
++        "libui_shim",
++    ],
++    shared_libs: [
++        "android.hardware.camera.provider@2.4",
++        "libbinder",
++        "libdl",
++        "libhidlbase",
++        "liblog",
++        "libutils",
++    ],
++}
+diff --git c/camera/provider/android.hardware.camera.provider@2.4-service.checkers.rc i/camera/provider/android.hardware.camera.provider@2.4-service.checkers.rc
+new file mode 100644
+index 0000000000000000000000000000000000000000..d3fa234b9206cf034bbb804ae5a5d6271ae25a77
+--- /dev/null
++++ i/camera/provider/android.hardware.camera.provider@2.4-service.checkers.rc
+@@ -0,0 +1,9 @@
++service vendor.camera-provider-2-4 /vendor/bin/hw/android.hardware.camera.provider@2.4-service.checkers
++    interface android.hardware.camera.provider@2.4::ICameraProvider legacy/0
++    class hal
++    user cameraserver
++    group audio camera input drmrpc media
++    ioprio rt 4
++    capabilities SYS_NICE
++    task_profiles CameraServiceCapacity MaxPerformance
++    setenv LD_PRELOAD /system/lib/libsensor.so:/system/lib/libutilscallstack.so:/vendor/lib/libui_shim.so:/vendor/lib/libcheckers_dpframework_compat.so
+diff --git c/camera/provider/service.cpp i/camera/provider/service.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..851c0d9d3a6528ca952c71a1238861e98bc15b46
+--- /dev/null
++++ i/camera/provider/service.cpp
+@@ -0,0 +1,67 @@
++/*
++ * Copyright 2017 The Android Open Source Project
++ *
++ * Licensed under the Apache License, Version 2.0 (the "License");
++ * you may not use this file except in compliance with the License.
++ * You may obtain a copy of the License at
++ *
++ *      http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++#define LOG_TAG "android.hardware.camera.provider@2.4-service.checkers"
++
++#include <android/hardware/camera/provider/2.4/ICameraProvider.h>
++#include <dlfcn.h>
++#include <hidl/HidlTransportSupport.h>
++#include <log/log.h>
++
++using android::OK;
++using android::sp;
++using android::status_t;
++using android::hardware::camera::provider::V2_4::ICameraProvider;
++using android::hardware::configureRpcThreadpool;
++using android::hardware::joinRpcThreadpool;
++
++using FetchProvider = ICameraProvider* (*)(const char* name);
++
++int main() {
++    ALOGI("Checkers legacy camera provider is starting");
++    configureRpcThreadpool(6, true);
++
++    void* implementation = dlopen(
++            "/vendor/lib/hw/android.hardware.camera.provider@2.4-impl-legacy.so",
++            RTLD_NOW | RTLD_LOCAL);
++    if (implementation == nullptr) {
++        ALOGE("Unable to load the Lineage legacy camera provider: %s", dlerror());
++        return 1;
++    }
++
++    FetchProvider fetchProvider = reinterpret_cast<FetchProvider>(
++            dlsym(implementation, "HIDL_FETCH_ICameraProvider"));
++    if (fetchProvider == nullptr) {
++        ALOGE("Unable to resolve the Lineage legacy camera provider: %s", dlerror());
++        return 1;
++    }
++
++    sp<ICameraProvider> provider = fetchProvider("legacy/0");
++    if (provider == nullptr) {
++        ALOGE("Unable to create the Lineage legacy camera provider");
++        return 1;
++    }
++
++    status_t status = provider->registerAsService("legacy/0");
++    if (status != OK) {
++        ALOGE("Unable to register legacy/0: %d", status);
++        return 1;
++    }
++
++    joinRpcThreadpool();
++    ALOGE("Camera provider RPC threadpool exited unexpectedly");
++    return 1;
++}
+diff --git c/device.mk i/device.mk
+index 246881c886dafdd20741b4bfa70c38157aa6779f..c2b57b3e47f3510024b6e90c5e43285ad669d504 100644
+--- c/device.mk
++++ i/device.mk
+@@ -25,6 +25,15 @@ PRODUCT_PACKAGES += \
+ PRODUCT_COPY_FILES += \
+     $(LOCAL_PATH)/configs/audio_policy_configuration.xml:$(TARGET_COPY_OUT_VENDOR)/etc/audio_policy_configuration.xml
+ 
++# Camera
++PRODUCT_PACKAGES += \
++    android.hardware.camera.provider@2.4-service.checkers \
++    libcheckers_dpframework_compat \
++    libui_shim
++
++PRODUCT_PROPERTY_OVERRIDES += \
++    ro.vendor.camera.video_orientation_offset=180
++
+ # Bluetooth
+ PRODUCT_PACKAGES += \
+     android.hardware.bluetooth@1.0-service \
+diff --git c/manifest_checkers.xml i/manifest_checkers.xml
+index b4ed7dd36cc17fa4498d6fa88294f459932452f6..dcf1fa7f103611bde3591fb05aa1b8d016c140cf 100644
+--- c/manifest_checkers.xml
++++ i/manifest_checkers.xml
+@@ -13,9 +13,22 @@
+         <transport>hwbinder</transport>
+         <fqname>@2.0::IEffectsFactory/default</fqname>
+     </hal>
+-   <hal format="hidl">
++    <hal format="hidl">
+         <name>android.hardware.bluetooth</name>
+         <transport>hwbinder</transport>
+         <fqname>@1.0::IBluetoothHci/default</fqname>
+     </hal>
++    <hal format="hidl" override="true">
++        <name>android.hardware.camera.provider</name>
++        <transport>hwbinder</transport>
++        <version>2.4</version>
++        <interface>
++            <name>ICameraProvider</name>
++            <instance>legacy/0</instance>
++        </interface>
++    </hal>
++    <hal format="hidl" override="true">
++        <name>vendor.mediatek.hardware.camera.ccap</name>
++        <transport>hwbinder</transport>
++    </hal>
+ </manifest>
+diff --git c/proprietary-files.txt i/proprietary-files.txt
+index f808cbdf8a32359be30a6af7eecdd981680d8b8d..f18c5c1224bb511d02080679e76ed51eafb433ad 100644
+--- c/proprietary-files.txt
++++ i/proprietary-files.txt
+@@ -70,3 +70,51 @@ system/vendor/firmware/TxPwrLimit_MT76x8.dat:vendor/firmware/TxPwrLimit_MT76x8.d
+ system/vendor/firmware/WIFI_RAM_CODE_MT7668.bin:vendor/firmware/WIFI_RAM_CODE_MT7668.bin
+ system/vendor/firmware/WIFI_RAM_CODE2_SDIO_MT7668.bin:vendor/firmware/WIFI_RAM_CODE2_SDIO_MT7668.bin
+ system/vendor/firmware/wifi.cfg:vendor/firmware/wifi.cfg
++
++# Camera
++system/lib/libhal_effects.so
++vendor/etc/custom.conf
++vendor/lib/hw/camera.mt8163.so
++vendor/lib/lib3a.so
++vendor/lib/libcam1_utils.so
++vendor/lib/libcam3_app.so
++vendor/lib/libcam3_hwnode.so
++vendor/lib/libcam3_hwpipeline.so
++vendor/lib/libcam3_pipeline.so
++vendor/lib/libcam3_utils.so
++vendor/lib/libcamalgo.so
++vendor/lib/libcam.camadapter.so
++vendor/lib/libcam.campipe.so
++vendor/lib/libcam.camshot.so
++vendor/lib/libcam.client.so
++vendor/lib/libcam.device1.so
++vendor/lib/libcam.device3.so
++vendor/lib/libcamdrv_FrmB.so
++vendor/lib/libcamdrv.so
++vendor/lib/libcameracustom.so
++vendor/lib/libcam.exif.so
++vendor/lib/libcam.exif.v3.so
++vendor/lib/libcam.hal3a.v3.dng.so
++vendor/lib/libcam.hal3a.v3.so
++vendor/lib/libcam.halsensor.so
++vendor/lib/libcam_hwutils.so
++vendor/lib/libcam.iopipe_FrmB.so
++vendor/lib/libcam.iopipe.so
++vendor/lib/libcam.metadataprovider.so
++vendor/lib/libcam.metadata.so
++vendor/lib/libcam_mmp.so
++vendor/lib/libcam.paramsmgr.so
++vendor/lib/libcam_platform.so
++vendor/lib/libcam.utils.sensorlistener.so
++vendor/lib/libcam.utils.so
++vendor/lib/libcam_utils.so
++vendor/lib/libfeatureiodrv.so
++vendor/lib/libfeatureio.so
++vendor/lib/libhdrproc.so
++vendor/lib/libimageio_FrmB.so
++vendor/lib/libimageio_plat_drv_FrmB.so
++vendor/lib/libimageio_plat_drv.so
++vendor/lib/libimageio.so
++vendor/lib/libmtkcam_fwkutils.so
++vendor/lib/libmtkjpeg.so
++vendor/lib/libmtk_mmutils.so
+diff --git c/sepolicy/vendor/file_contexts i/sepolicy/vendor/file_contexts
+new file mode 100644
+index 0000000000000000000000000000000000000000..ed6500b8ffc0fbbd895f22c894056e7af7f72a52
+--- /dev/null
++++ i/sepolicy/vendor/file_contexts
+@@ -0,0 +1 @@
++/(vendor|system/vendor)/bin/hw/android\.hardware\.camera\.provider@2\.4-service\.checkers    u:object_r:hal_camera_default_exec:s0
+diff --git c/vendor.prop i/vendor.prop
+index 77033646c9ac6081d768570947eaeecb52a97313..1d52732d08bf89189d95bbf6d6b0a92b74d5dcd2 100644
+--- c/vendor.prop
++++ i/vendor.prop
+@@ -8,6 +8,13 @@ persist.bluetooth.enablenewavrcp=false
+ # Display
+ ro.surface_flinger.primary_display_orientation=ORIENTATION_90
+ 
++# Camera
++persist.vendor.camera.awbtrim.r=509
++persist.vendor.camera.awbtrim.b=512
++persist.vendor.camera.awbtrim.r.warm=509
++persist.vendor.camera.awbtrim.b.warm=512
++persist.vendor.camera.awbtrim.trace=0
++
+ # Bluetooth
+ ro.vendor.rfkilldisabled=1
+ 

@@ -1,0 +1,230 @@
+diff --git c/camera/device/1.0-legacy/Android.bp i/camera/device/1.0-legacy/Android.bp
+index 2005caae3fbdeb74c47bfad4f5d8530ef50c51ee..cb2bbd191b9fa9a87cdab6ac08f9766f5cc06e30 100644
+--- c/camera/device/1.0-legacy/Android.bp
++++ i/camera/device/1.0-legacy/Android.bp
+@@ -1,6 +1,19 @@
+-cc_library_shared {
++soong_config_module_type {
++    name: "lineage_legacy_camera_device",
++    module_type: "cc_library_shared",
++    config_namespace: "amazonCamera",
++    bool_variables: ["mtk_preview_buffer"],
++    properties: ["cflags"],
++}
++
++lineage_legacy_camera_device {
+     name: "camera.device@1.0-impl-legacy",
+     defaults: ["hidl_defaults"],
++    soong_config_variables: {
++        mtk_preview_buffer: {
++            cflags: ["-DMTK_LEGACY_PREVIEW_BUFFER"],
++        },
++    },
+     proprietary: true,
+     srcs: [
+         "CameraDevice.cpp",
+@@ -27,6 +40,9 @@ cc_library_shared {
+     static_libs: [
+         "android.hardware.camera.common@1.0-helper"
+     ],
++    header_libs: [
++        "libnativebase_headers",
++    ],
+     include_dirs: [
+         "frameworks/native/include/media/openmax"
+     ],
+diff --git c/camera/device/1.0-legacy/CameraDevice.cpp i/camera/device/1.0-legacy/CameraDevice.cpp
+index f324e456dd4d4a70fa7f4cbf47ea61d0784e36f0..b591e5b9c46c38bd5d1335a89e9c53a9135255f9 100644
+--- c/camera/device/1.0-legacy/CameraDevice.cpp
++++ i/camera/device/1.0-legacy/CameraDevice.cpp
+@@ -38,6 +38,29 @@ HandleImporter CameraDevice::sHandleImporter;
+ 
+ static CameraDevice *sCameraDevice;
+ 
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++static_assert(offsetof(android_native_base_t, incRef) == 0x18,
++              "MTK camera expects android_native_base_t::incRef at 0x18");
++static_assert(offsetof(ANativeWindowBuffer, handle) == 0x3c,
++              "MTK camera expects ANativeWindowBuffer::handle at 0x3c");
++
++CameraDevice::CameraPreviewWindow::NativeBuffer::NativeBuffer() {
++    buffer.common.reserved[0] = this;
++    buffer.common.incRef = retain;
++    buffer.common.decRef = release;
++}
++
++void CameraDevice::CameraPreviewWindow::NativeBuffer::retain(android_native_base_t* base) {
++    auto* owner = static_cast<NativeBuffer*>(base->reserved[0]);
++    owner->incStrong(owner);
++}
++
++void CameraDevice::CameraPreviewWindow::NativeBuffer::release(android_native_base_t* base) {
++    auto* owner = static_cast<NativeBuffer*>(base->reserved[0]);
++    owner->decStrong(owner);
++}
++#endif
++
+ Status CameraDevice::getHidlStatus(const int& status) {
+     switch (status) {
+         case 0: return Status::OK;
+@@ -144,6 +167,9 @@ void CameraDevice::CameraPreviewWindow::cleanUpCirculatingBuffers() {
+     }
+     mCirculatingBuffers.clear();
+     mBufferIdMap.clear();
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++    mNativeBuffers.clear();
++#endif
+ }
+ 
+ int CameraDevice::sDequeueBuffer(struct preview_stream_ops* w,
+@@ -174,10 +200,40 @@ int CameraDevice::sDequeueBuffer(struct preview_stream_ops* w,
+                         return;
+                     } else {
+                         object->mCirculatingBuffers[bufferId] = importedBuf;
+-                        object->mBufferIdMap[&(object->mCirculatingBuffers[bufferId])] = bufferId;
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++                        // Android 7's in-process camera bridge returned
++                        // &ANativeWindowBuffer::handle. Some MTK HAL1 code recovers
++                        // the containing buffer to retain it and read its dimensions.
++                        // HIDL transports only the handle, ID, and stride, so recreate
++                        // the lost container on the provider side.
++                        sp<CameraPreviewWindow::NativeBuffer> nativeBuffer =
++                                new CameraPreviewWindow::NativeBuffer();
++                        nativeBuffer->buffer.width = object->mWidth;
++                        nativeBuffer->buffer.height = object->mHeight;
++                        nativeBuffer->buffer.stride = strd;
++                        nativeBuffer->buffer.format = object->mFormat;
++                        nativeBuffer->buffer.usage_deprecated =
++                                static_cast<int>(object->mUsage);
++                        nativeBuffer->buffer.layerCount = 1;
++                        nativeBuffer->buffer.handle = importedBuf;
++                        nativeBuffer->buffer.usage = object->mUsage;
++                        object->mNativeBuffers[bufferId] = nativeBuffer;
++                        object->mBufferIdMap[
++                                &(object->mNativeBuffers[bufferId]->buffer.handle)] = bufferId;
++#else
++                        object->mBufferIdMap[
++                                &(object->mCirculatingBuffers[bufferId])] = bufferId;
++#endif
+                     }
+                 }
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++                ANativeWindowBuffer* nativeBuffer =
++                        &(object->mNativeBuffers[bufferId]->buffer);
++                nativeBuffer->stride = strd;
++                *buffer = &(nativeBuffer->handle);
++#else
+                 *buffer = &(object->mCirculatingBuffers[bufferId]);
++#endif
+                 *stride = strd;
+             }
+         });
+@@ -228,8 +284,20 @@ int CameraDevice::sSetBuffersGeometry(struct preview_stream_ops* w,
+     }
+ 
+     object->cleanUpCirculatingBuffers();
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++    Status status = object->mPreviewCallback->setBuffersGeometry(
++            width, height, static_cast<PixelFormat>(format));
++    if (status == Status::OK) {
++        Mutex::Autolock _l(object->mLock);
++        object->mWidth = width;
++        object->mHeight = height;
++        object->mFormat = format;
++    }
++    return getStatusT(status);
++#else
+     return getStatusT(
+             object->mPreviewCallback->setBuffersGeometry(width, height, (PixelFormat) format));
++#endif
+ }
+ 
+ int CameraDevice::sSetCrop(struct preview_stream_ops *w,
+@@ -261,7 +329,16 @@ int CameraDevice::sSetUsage(struct preview_stream_ops* w, int usage) {
+     }
+ 
+     object->cleanUpCirculatingBuffers();
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++    Status status = object->mPreviewCallback->setUsage(static_cast<BufferUsage>(usage));
++    if (status == Status::OK) {
++        Mutex::Autolock _l(object->mLock);
++        object->mUsage = static_cast<uint32_t>(usage);
++    }
++    return getStatusT(status);
++#else
+     return getStatusT(object->mPreviewCallback->setUsage((BufferUsage)usage));
++#endif
+ }
+ 
+ int CameraDevice::sSetSwapInterval(struct preview_stream_ops *w, int interval) {
+diff --git c/camera/device/1.0-legacy/CameraDevice_1_0.h i/camera/device/1.0-legacy/CameraDevice_1_0.h
+index a8879d43b2589616ec1d005d71090439e2b7990e..9aac23fa642a31399182d171fc8c594b1779e19b 100644
+--- c/camera/device/1.0-legacy/CameraDevice_1_0.h
++++ i/camera/device/1.0-legacy/CameraDevice_1_0.h
+@@ -18,6 +18,9 @@
+ #define ANDROID_HARDWARE_CAMERA_DEVICE_V1_0_CAMERADEVICE_H
+ 
+ #include <unordered_map>
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++#include <nativebase/nativebase.h>
++#endif
+ #include "utils/Mutex.h"
+ #include "utils/SortedVector.h"
+ #include "CameraModule.h"
+@@ -150,6 +153,21 @@ private:
+         sp<ICameraDevicePreviewCallback> mPreviewCallback = nullptr;
+         std::unordered_map<uint64_t, buffer_handle_t> mCirculatingBuffers;
+         std::unordered_map<buffer_handle_t*, uint64_t> mBufferIdMap;
++#ifdef MTK_LEGACY_PREVIEW_BUFFER
++        struct NativeBuffer : public RefBase {
++            NativeBuffer();
++
++            static void retain(android_native_base_t* base);
++            static void release(android_native_base_t* base);
++
++            ANativeWindowBuffer buffer;
++        };
++        std::unordered_map<uint64_t, sp<NativeBuffer>> mNativeBuffers;
++        int mWidth = 0;
++        int mHeight = 0;
++        int mFormat = 0;
++        uint64_t mUsage = 0;
++#endif
+     } mHalPreviewWindow;
+ 
+     // gating access to mDevice, mInitFail, mDisconnected
+diff --git c/camera/provider/2.4-legacy/Android.bp i/camera/provider/2.4-legacy/Android.bp
+index 9b23ada89d5903cd34a802b1e152d7666db9ecf5..04d383351d76305cfdeafcceebe497221c51c66d 100644
+--- c/camera/provider/2.4-legacy/Android.bp
++++ i/camera/provider/2.4-legacy/Android.bp
+@@ -1,6 +1,19 @@
+-cc_library_shared {
++soong_config_module_type {
++    name: "lineage_legacy_camera_provider",
++    module_type: "cc_library_shared",
++    config_namespace: "amazonCamera",
++    bool_variables: ["mtk_preview_buffer"],
++    properties: ["cflags"],
++}
++
++lineage_legacy_camera_provider {
+     name: "android.hardware.camera.provider@2.4-impl-legacy",
+     defaults: ["hidl_defaults"],
++    soong_config_variables: {
++        mtk_preview_buffer: {
++            cflags: ["-DMTK_LEGACY_PREVIEW_BUFFER"],
++        },
++    },
+     proprietary: true,
+     relative_install_path: "hw",
+     srcs: ["CameraProvider.cpp"],
+@@ -23,5 +36,8 @@ cc_library_shared {
+     ],
+     static_libs: [
+         "android.hardware.camera.common@1.0-helper"
+-    ]
++    ],
++    header_libs: [
++        "libnativebase_headers",
++    ],
+ }

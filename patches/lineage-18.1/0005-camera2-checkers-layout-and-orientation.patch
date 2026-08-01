@@ -1,0 +1,52 @@
+diff --git c/src/com/android/camera/CaptureLayoutHelper.java i/src/com/android/camera/CaptureLayoutHelper.java
+index 5edf817d35b74c11ca56e00bdaa5c6504cb9c377..eeb3bfb02788e12a989f8dae80a82b1dc4a75252 100644
+--- c/src/com/android/camera/CaptureLayoutHelper.java
++++ i/src/com/android/camera/CaptureLayoutHelper.java
+@@ -289,25 +289,6 @@ public class CaptureLayoutHelper implements CameraAppUI.NonDecorWindowSizeChange
+                     config.mBottomBarRect.set(width / 2 - previewShorterEdge / 2, height - barSize,
+                             width / 2 + previewShorterEdge / 2, height);
+                 }
+-            } else if (previewAspectRatio > 14f / 9f) {
+-                // If the preview aspect ratio is large enough, simply offset the
+-                // preview to the bottom/right.
+-                // TODO: This logic needs some refinement.
+-                barSize = mBottomBarOptimalHeight;
+-                previewShorterEdge = shorterEdge;
+-                previewLongerEdge = shorterEdge * previewAspectRatio;
+-                config.mBottomBarOverlay = true;
+-                if (landscape) {
+-                    float right = width;
+-                    float left = right - previewLongerEdge;
+-                    config.mPreviewRect.set(left, 0, right, previewShorterEdge);
+-                    config.mBottomBarRect.set(width - barSize, 0, width, height);
+-                } else {
+-                    float bottom = height;
+-                    float top = bottom - previewLongerEdge;
+-                    config.mPreviewRect.set(0, top, previewShorterEdge, bottom);
+-                    config.mBottomBarRect.set(0, height - barSize, width, height);
+-                }
+             } else if (remainingSpaceAlongLongerEdge <= mBottomBarMinHeight) {
+                 // Need to scale down the preview to fit in the space excluding the bottom bar.
+                 previewLongerEdge = longerEdge - mBottomBarMinHeight;
+diff --git c/src/com/android/camera/VideoModule.java i/src/com/android/camera/VideoModule.java
+index e8222f6d34c67ca38b5ea5ef40ae55b932e290b8..dd29dff7479b36b16afce9ff9fd89a5e04b4a079 100644
+--- c/src/com/android/camera/VideoModule.java
++++ i/src/com/android/camera/VideoModule.java
+@@ -41,6 +41,7 @@ import android.os.Looper;
+ import android.os.Message;
+ import android.os.ParcelFileDescriptor;
+ import android.os.SystemClock;
++import android.os.SystemProperties;
+ import android.provider.MediaStore;
+ import android.provider.MediaStore.MediaColumns;
+ import android.provider.MediaStore.Video;
+@@ -1180,6 +1181,9 @@ public class VideoModule extends CameraModule
+                 mAppController.getOrientationManager().getDeviceOrientation().getDegrees();
+         int rotation = CameraUtil.getImageRotation(
+                 sensorOrientation, deviceOrientation, isCameraFrontFacing());
++        int orientationOffset = SystemProperties.getInt(
++                "ro.vendor.camera.video_orientation_offset", 0);
++        rotation = (rotation + orientationOffset) % 360;
+         mMediaRecorder.setOrientationHint(rotation);
+ 
+         try {

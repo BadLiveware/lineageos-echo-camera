@@ -1,0 +1,16 @@
+diff --git c/mt8163.mk i/mt8163.mk
+index 5259e133bfc0ddca5358b226c0e8bc2db739088d..14b7e4f82080d8034911c628f8038985ae34bd2a 100644
+--- c/mt8163.mk
++++ i/mt8163.mk
+@@ -58,8 +58,10 @@ PRODUCT_PACKAGES += \
+     camera.device@3.2-impl \
+     libsensorndkbridge
+ 
++# These devices expose one front-facing camera and no back camera. Advertising
++# android.hardware.camera makes CameraX require a nonexistent back camera.
+ PRODUCT_COPY_FILES += \
+-    frameworks/native/data/etc/android.hardware.camera.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.camera.xml
++    frameworks/native/data/etc/android.hardware.camera.front.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.camera.front.xml
+ 
+ # Display
+ PRODUCT_PACKAGES += \

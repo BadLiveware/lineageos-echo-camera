@@ -1,0 +1,5 @@
+58a5e15d0b6752a17731ed78c9ed84748cf17a7287c32fca16e91021c0543742  0001-hardware-amazon-camera-libui-compat.patch
+0404f80a2d8a39c6ca4881a11133fa46dc6c5cab75fa0af5ddf26b9e44db8197  0002-lineage-legacy-camera-preview-buffer.patch
+439383c734d8788473efdb04a5c43a229c8b0fb3cd32b4fb8f9c937f7a88e6a1  0003-mt8163-front-camera-feature.patch
+8b7a355993af1b006ae05bf5d0875ccc033945c3173c92aec9c31d000ee9f7b7  0004-checkers-camera-provider-and-compat.patch
+5887e06175a62e3f9d071600d5e3674d168b85c8ef2960f297ec0103c1481429  0005-camera2-checkers-layout-and-orientation.patch
