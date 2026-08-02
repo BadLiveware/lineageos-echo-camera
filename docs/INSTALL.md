@@ -1,97 +1,89 @@
-# Apply and build the Checkers camera patches
+# Build the Checkers LineageOS image
 
-This guide is for integrators with an existing LineageOS 18.1 build environment and lawful access to the Checkers proprietary files.
+The supported build runs entirely through Docker Buildx Bake. The host supplies Docker, disk space, and a lawful local firmware dump; the container supplies the LineageOS source checkout and build dependencies.
 
 ## Prerequisites
 
-- a clean LineageOS 18.1 source checkout;
-- Amazon MT8163 projects and the pinned Linaro 6.3.1 kernel toolchain from `manifests/amazon_mt8163-camera.xml`;
-- the exact project revisions recorded in `patches/lineage-18.1/series.tsv`;
-- a compatible Checkers device or firmware dump for proprietary-file extraction;
-- the normal LineageOS 18.1 host build dependencies.
+- Docker Engine with the `docker buildx` plugin;
+- a trusted local Linux AMD64 Docker builder;
+- at least 200 GB available in Docker's storage;
+- a compatible Checkers system dump.
 
-On current Arch Linux hosts, also install `ncurses5-compat-libs` from the AUR. The RenderScript compiler bundled with LineageOS 18.1 requires `libncurses.so.5` and `libtinfo.so.5`.
-
-Copy the manifest before syncing a new checkout:
-
-```bash
-mkdir -p /path/to/lineage-18.1/.repo/local_manifests
-cp /path/to/lineageos-camera/manifests/amazon_mt8163-camera.xml \
-  /path/to/lineage-18.1/.repo/local_manifests/
-cd /path/to/lineage-18.1
-repo sync
-```
-
-## 1. Preflight the patch series
-
-The preflight checks all five project revisions, requires clean project trees, and asks Git to validate every patch before any files are changed.
-
-```bash
-cd /path/to/lineageos-camera
-./scripts/apply-patches.sh --check /path/to/lineage-18.1
-```
-
-Expected final line:
+The firmware path must be an extracted directory with this file:
 
 ```text
-All patches apply cleanly.
+system/vendor/lib/hw/camera.mt8163.so
 ```
 
-A revision mismatch is intentional protection. Sync to the recorded revision or regenerate and validate a new patch bundle; do not bypass the check by applying fragments manually.
+The build does not copy the firmware dump into the exported artifact stage. BuildKit sends named contexts to the selected builder, so use a trusted local builder and never select a remote or shared builder for this build.
 
-## 2. Apply the patches
+## Build
+
+Create a dedicated builder backed by the local Docker Engine:
 
 ```bash
-./scripts/apply-patches.sh /path/to/lineage-18.1
+docker buildx create \
+  --name checkers-builder \
+  --driver docker-container \
+  --driver-opt image=moby/buildkit:v0.31.2@sha256:63db51c9b30208a7c2b1c40392c7ebb9ce2f85ba238a18a85420f8f5ea2d4684 \
+  --use unix:///var/run/docker.sock
+docker buildx inspect --bootstrap
 ```
 
-The script performs the complete preflight again, then applies the patches in dependency order. It leaves normal uncommitted source changes in each Android project so they can be inspected before building.
-
-## 3. Extract proprietary files
-
-The repository does not contain Amazon or MediaTek camera binaries. The Checkers patch adds the required entries to `proprietary-files.txt`.
-
-Run the Checkers extractor directly. It preserves the shared MT8163 vendor files supplied by the manifest and extracts the device-specific files:
+The inspection must show the `docker-container` driver and `unix:///var/run/docker.sock` endpoint. From the repository root, export a new build ID and run the Bake target:
 
 ```bash
-cd /path/to/lineage-18.1/device/amazon/checkers
-./extract-files.sh /path/to/compatible-system-dump
-/path/to/lineageos-camera/scripts/verify-proprietary-files.sh /path/to/lineage-18.1
+export CHECKERS_FIRMWARE=/absolute/path/to/checkers-system-dump
+export CHECKERS_BUILD_ID=checkers-clean-$(date -u +%Y%m%dT%H%M%SZ)
+docker buildx bake --allow=fs.read="$CHECKERS_FIRMWARE" checkers
 ```
 
-The verifier stops if any required proprietary file is missing.
+The filesystem entitlement grants the selected local builder read access only to the firmware directory. A new build ID creates a new BuildKit cache and output directory; use both a new builder and build ID for a clean-room validation build.
 
-Use a source matching the Checkers Android generation expected by the device tree. Review the generated `vendor/amazon/checkers` tree before building. Do not publish extracted binaries unless their redistribution terms permit it.
+The target performs the complete workflow:
 
-## 4. Build
+1. initializes LineageOS 18.1 from the repository's fully revision-locked manifest;
+2. syncs every source project and the Amazon-OSS patch repository at their recorded commits;
+3. verifies and applies all six required Amazon-OSS compatibility patches;
+4. verifies and applies the five project-specific camera patches;
+5. extracts the Checkers proprietary files without replacing the shared MT8163 vendor tree;
+6. verifies every proprietary file referenced by both vendor trees;
+7. runs `lunch lineage_checkers-userdebug` and `m bacon`;
+8. exports the OTA, partition images, pinned manifest, and checksums from a `scratch` stage.
+
+Any failed step stops the build. Do not repair files inside the BuildKit cache; fix the manifest, patch bundle, extraction input, or container definition and run with a new build ID.
+
+## Output
+
+The local exporter writes to:
+
+```text
+dist/$CHECKERS_BUILD_ID/
+```
+
+Expected files:
+
+```text
+OTA_SOURCE_NAME
+PROPRIETARY_SHA256SUMS
+SHA256SUMS
+boot.img
+checkers-lineage-18.1.zip
+manifest.xml
+recovery.img
+```
+
+Verify the exported files before installation:
 
 ```bash
-cd /path/to/lineage-18.1
-source build/envsetup.sh
-lunch lineage_checkers-userdebug
-m bacon
+cd dist/$CHECKERS_BUILD_ID
+sha256sum -c SHA256SUMS
 ```
 
-For a faster source check after camera changes:
+`checkers-lineage-18.1.zip` is the OTA package. Its compressed block payload carries the system partition; the Checkers `bacon` target does not emit a separate top-level `system.img`. `OTA_SOURCE_NAME` records the package's original generated filename. `PROPRIETARY_SHA256SUMS` records the exact proprietary payload accepted by the build.
+
+After exporting and verifying the artifacts, remove the dedicated builder to delete its source cache and local firmware context:
 
 ```bash
-m libcheckers_dpframework_compat
-m systemimage
+docker buildx rm checkers-builder
 ```
-
-## Updating an existing installation
-
-Distribute the resulting LineageOS OTA as one unit. The provider executable, init declaration, compatibility library, framework adapter, Camera2 behavior, properties, and proprietary blob closure are version-coupled.
-
-Do not install `libcheckers_dpframework_compat.so` on stock or unrelated ROM builds. The compatibility boundary is described in `docs/PATCHES.md`.
-
-## Removing an uncommitted application
-
-Because `apply-patches.sh` does not create commits, each affected Android project can be restored with Git after preserving any wanted work. Inspect before discarding changes:
-
-```bash
-git -C /path/to/project status --short
-git -C /path/to/project diff
-```
-
-Use a fresh checkout when possible. Avoid broad reset or clean commands in a source tree containing unrelated work.

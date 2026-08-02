@@ -1,0 +1,9 @@
+.git
+.pi
+dist
+**/__pycache__
+**/*.pyc
+tools/camhal-relay/backups
+tools/camhal-relay/build
+tools/camhal-relay/results
+tools/camhal-relay/vendor-blobs

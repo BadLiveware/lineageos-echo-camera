@@ -1,0 +1,7 @@
+# order	project_path	base_commit	patch
+1	bionic	3a003876ad043c5280e0fbb334e8d17c3d941bfc	bionic/0001-fdsan-default-to-WARN_ONCE-instead-of-FATAL.patch
+2	frameworks/av	18186d8f9b4dcaff242ae9ea9b74e6827f14a1cc	frameworks/av/0001-media-Do-not-crash-on-TimeCheck-timeout.patch
+3	frameworks/base	557ec5dffbd8464d054931f890c1b51a0b76039b	frameworks/base/0001-BrightnessUtils-Conditionally-disable-gamma-conversi.patch
+4	frameworks/native	103c04dc9ff92585765f9076959be684351064c3	frameworks/native/0001-BACKPORT-Add-orientation-configuration-for-touchscre.patch
+5	frameworks/opt/net/wifi	18e932aec8672fef4f9fbeb6bb0d19ae20558898	frameworks/opt/net/wifi/0001-Add-overlay-to-disable-SHA256-key-management.patch
+6	packages/apps/Settings	858640c722705eab4a4b65eef420959f83683067	packages/apps/Settings/0001-Settings-Keep-Display-over-other-apps-available-on-l.patch

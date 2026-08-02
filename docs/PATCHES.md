@@ -1,6 +1,25 @@
 # Patch ownership and dependencies
 
-The LineageOS 18.1 camera bring-up crosses five source projects. Each patch is rooted at an exact upstream commit and can be inspected or applied independently with ordinary Git tooling.
+## Amazon-OSS baseline
+
+Amazon-OSS's supported LineageOS 18.1 setup syncs its `patches` repository and requires running `./patches/apply.sh` after every fresh source sync. The container preserves that dependency without invoking the mutation-first upstream helper: `scripts/apply-amazon-patches.sh` verifies the pinned patch-repository revision, checks that its complete patch inventory is declared, preflights every target, and then applies the patches as worktree changes.
+
+The pinned Amazon baseline contains six compatibility patches:
+
+| Android project | Responsibility |
+|---|---|
+| `bionic` | Makes fdsan warn once instead of terminating legacy vendor processes. |
+| `frameworks/av` | Avoids crashing media processes on `TimeCheck` timeout. |
+| `frameworks/base` | Makes brightness gamma conversion configurable for these displays. |
+| `frameworks/native` | Backports IDC `touch.orientation` handling required by the rotated Checkers panel. |
+| `frameworks/opt/net/wifi` | Adds an overlay switch for SHA-256 key-management support. |
+| `packages/apps/Settings` | Keeps “Display over other apps” available on low-RAM devices. |
+
+The source-project bases and upstream patch paths are machine-readable in `manifests/amazon-oss-patches-lineage-18.1.tsv`. The Amazon patch repository itself is locked in the full source manifest.
+
+## Camera bring-up
+
+The project-specific camera bring-up crosses five source projects. Each patch is rooted at an exact upstream commit and can be inspected or applied independently with ordinary Git tooling.
 
 | Order | Android project | Responsibility |
 |---:|---|---|

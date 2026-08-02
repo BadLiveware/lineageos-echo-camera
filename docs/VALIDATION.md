@@ -4,10 +4,12 @@ The patch bundle was validated against the exact LineageOS 18.1 bases in `series
 
 ## Patch integrity
 
-- All five patch checksums in `patches/lineage-18.1/SHA256SUMS` pass.
-- Every patch applies cleanly in a detached worktree at its recorded base commit.
-- Application validation covers both committed development changes and untracked non-ignored source files captured through alternate Git indexes.
-- Proprietary binaries are not present in the bundle.
+- Amazon-OSS's required patch repository is pinned at `e2060e7985fdf61ebd0663f170aed8609dbb5e1e`.
+- Its complete six-patch inventory is declared in `manifests/amazon-oss-patches-lineage-18.1.tsv` and applies cleanly at every recorded LineageOS base.
+- All five camera patch checksums in `patches/lineage-18.1/SHA256SUMS` pass.
+- Every camera patch applies cleanly in a detached worktree at its recorded base commit.
+- Camera patch regeneration covers both committed development changes and untracked non-ignored source files through alternate Git indexes.
+- Proprietary binaries are not present in the patch bundles.
 
 Run the same detached-worktree check with:
 
@@ -23,6 +25,15 @@ The final device-tree state passed:
 m libcheckers_dpframework_compat
 m systemimage
 ```
+
+A fresh dedicated Buildx builder completed the full pinned container workflow in 1 hour 18 minutes. The resulting OTA was:
+
+```text
+checkers-amazon-patches-20260802T174641Z/checkers-lineage-18.1.zip
+SHA-256: 899be1a95a124b31d85bf3001ee45cdb5850c8f94612e2fe910db17fb9f4a6ce
+```
+
+All exported checksums passed. The exported manifest records the Amazon patch revision, and the OTA's `libinputreader.so` contains the `touch.orientation` and `ORIENTATION_90` implementation required by the Checkers IDC.
 
 The generated `system/build.prop` contained all five `persist.vendor.camera.awbtrim.*` defaults. The deployed compatibility library matched the built library byte-for-byte by SHA-256.
 
@@ -81,7 +92,9 @@ The motion-analysis input is correct, but the upstream camera path is not optimi
 
 After deployment and reboot:
 
-- Camera2 held an active camera client;
+- InputReader reported `Orientation: ORIENTATION_90` and `SurfaceOrientation: 1` for the Goodix touchscreen;
+- physical touchscreen behavior was confirmed across the display;
+- Camera2 held an active camera client and produced a working preview;
 - the camera crash log buffer was empty;
 - the final library hash matched the system-image output;
 - AWB properties survived reboot;

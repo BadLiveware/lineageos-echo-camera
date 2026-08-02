@@ -32,6 +32,10 @@
   <!-- Checkers uses MT76xx; the upstream MT66xx hardware repo is unpublished. -->
   <project path="hardware/mediatek/mt76xx" name="android_hardware_mediatek_mt76xx" remote="amazon-oss" />
 
+  <!-- Required compatibility backports; apply through scripts/apply-amazon-patches.sh. -->
+  <project path="patches" name="patches" remote="amazon-oss"
+           revision="e2060e7985fdf61ebd0663f170aed8609dbb5e1e" />
+
   <project path="vendor/amazon/cronos" name="android_vendor_amazon_cronos" remote="amazon-oss" />
   <project path="vendor/amazon/checkers" name="android_vendor_amazon_checkers" remote="amazon-oss"
            revision="353b69abbb125a8fa9fdddd1fbee76d275aafbed" />
