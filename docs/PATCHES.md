@@ -16,7 +16,7 @@ Exact upstream URLs, branches, bases, and patch filenames are machine-readable i
 
 `vendor/amazon/checkers` is deliberately absent from the patch series. Its camera closure consists of generated makefiles and proprietary binaries extracted from a compatible device or firmware source. Patch 4 updates the extraction manifest and makes `device/amazon/checkers/extract-files.sh SOURCE` regenerate only the Checkers vendor tree by default.
 
-The local manifest separately supplies `vendor/amazon/mt8163-common`. That shared tree contains Karnak-derived platform blobs and the Checkers extraction wrapper preserves it automatically.
+The local manifest supplies the shared `vendor/amazon/mt8163-common` tree, which the Checkers extraction wrapper leaves unchanged.
 
 This keeps the public repository useful without redistributing additional Amazon or MediaTek binaries.
 

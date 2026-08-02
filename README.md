@@ -20,7 +20,7 @@ cd /path/to/lineageos-camera
 ./scripts/apply-patches.sh /path/to/lineage-18.1
 ```
 
-Then extract only the Checkers-specific proprietary files and build. The manifest already supplies the shared MT8163 vendor tree, whose blobs come from a different firmware generation.
+Then extract the Checkers proprietary files, verify that the blob set is complete, and build:
 
 ```bash
 cd /path/to/lineage-18.1/device/amazon/checkers

@@ -49,7 +49,7 @@ The script performs the complete preflight again, then applies the patches in de
 
 The repository does not contain Amazon or MediaTek camera binaries. The Checkers patch adds the required entries to `proprietary-files.txt`.
 
-The local manifest supplies `vendor/amazon/mt8163-common`, including common blobs derived from the newer Karnak firmware generation. Run the patched Checkers extractor directly; its default flow preserves the synced common project and extracts only the Checkers-specific files:
+Run the Checkers extractor directly. It preserves the shared MT8163 vendor files supplied by the manifest and extracts the device-specific files:
 
 ```bash
 cd /path/to/lineage-18.1/device/amazon/checkers
@@ -57,7 +57,7 @@ cd /path/to/lineage-18.1/device/amazon/checkers
 /path/to/lineageos-camera/scripts/verify-proprietary-files.sh /path/to/lineage-18.1
 ```
 
-The verifier fails before the build if either vendor tree references files that extraction did not supply. A Checkers firmware source does not contain every Karnak-derived DRM, thermal, media, and MD32 file, so do not invoke the shared MT8163 extractor directly. If an earlier unscoped extraction replaced the common blobs, restore `vendor/amazon/mt8163-common` from the manifest before continuing.
+The verifier stops if any required proprietary file is missing.
 
 Use a source matching the Checkers Android generation expected by the device tree. Review the generated `vendor/amazon/checkers` tree before building. Do not publish extracted binaries unless their redistribution terms permit it.
 
