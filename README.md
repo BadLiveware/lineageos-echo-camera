@@ -4,6 +4,32 @@ This repository packages the camera bring-up for the Amazon Echo Show 5 (`checke
 
 No proprietary camera binaries are distributed. The build reads them from a compatible device or firmware dump supplied locally.
 
+## Create a firmware dump
+
+From a rooted Checkers installation or recovery with ADB access, copy the system partition to a local directory:
+
+```bash
+export CHECKERS_FIRMWARE="$PWD/checkers-system-dump"
+mkdir -p "$CHECKERS_FIRMWARE"
+
+adb root
+adb wait-for-device
+adb pull /system "$CHECKERS_FIRMWARE/"
+```
+
+Fire OS stores the vendor files under `/system/vendor`. On installations with a separate `/vendor` partition, populate the same dump layout if the camera HAL was not included by the first pull:
+
+```bash
+if [[ ! -f "$CHECKERS_FIRMWARE/system/vendor/lib/hw/camera.mt8163.so" ]]; then
+  mkdir -p "$CHECKERS_FIRMWARE/system/vendor"
+  adb pull /vendor/. "$CHECKERS_FIRMWARE/system/vendor/"
+fi
+
+test -f "$CHECKERS_FIRMWARE/system/vendor/lib/hw/camera.mt8163.so"
+```
+
+The dump remains local and is passed to BuildKit as a read-only build context.
+
 ## Build
 
 Requirements:
@@ -29,6 +55,8 @@ docker buildx bake --allow=fs.read="$CHECKERS_FIRMWARE" checkers
 ```
 
 The Bake target uses a pinned Ubuntu base image, dated package snapshot, and Android `repo` launcher. It syncs the pinned LineageOS sources and Amazon-OSS patch repository, verifies and applies the required Amazon baseline followed by the camera patch series, extracts and verifies all proprietary files, runs `m bacon`, and exports only the finished artifacts from a `scratch` stage.
+
+A full clean build, including source sync, compilation, packaging, export, and checksum verification, took **1 hour 18 minutes on an AMD Ryzen AI Max+ 395**. First-build time will vary with network and storage performance; this measurement does not represent an incremental rebuild.
 
 Artifacts are written to `dist/$CHECKERS_BUILD_ID`:
 
