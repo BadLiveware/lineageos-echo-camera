@@ -49,10 +49,14 @@ The script performs the complete preflight again, then applies the patches in de
 
 The repository does not contain Amazon or MediaTek camera binaries. The Checkers patch adds the required entries to `proprietary-files.txt`.
 
+The local manifest supplies `vendor/amazon/mt8163-common`, including common blobs derived from the newer Karnak firmware generation. Preserve that synced project and extract only the Checkers-specific files:
+
 ```bash
 cd /path/to/lineage-18.1/device/amazon/checkers
-./extract-files.sh /path/to/compatible/system-dump
+./extract-files.sh --only-target /path/to/compatible-system-dump
 ```
+
+Without `--only-target`, the shared extractor cleans `vendor/amazon/mt8163-common` and tries to recreate it from the Checkers dump. A Checkers firmware source does not contain every Karnak-derived DRM, thermal, media, and MD32 file, leaving generated makefiles that reference missing inputs. If an unscoped extraction has already been run, restore `vendor/amazon/mt8163-common` from the manifest before continuing.
 
 Use a source matching the Checkers Android generation expected by the device tree. Review the generated `vendor/amazon/checkers` tree before building. Do not publish extracted binaries unless their redistribution terms permit it.
 
