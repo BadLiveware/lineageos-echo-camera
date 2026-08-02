@@ -10,6 +10,8 @@ This guide is for integrators with an existing LineageOS 18.1 build environment 
 - a compatible Checkers device or firmware dump for proprietary-file extraction;
 - the normal LineageOS 18.1 host build dependencies.
 
+On current Arch Linux hosts, also install `ncurses5-compat-libs` from the AUR. The RenderScript compiler bundled with LineageOS 18.1 requires `libncurses.so.5` and `libtinfo.so.5`.
+
 Copy the manifest before syncing a new checkout:
 
 ```bash
