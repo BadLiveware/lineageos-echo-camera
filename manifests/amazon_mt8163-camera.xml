@@ -3,6 +3,13 @@
   <remote name="amazon-oss"
           fetch="https://github.com/amazon-oss"
           revision="refs/heads/lineage-18.1" />
+  <remote name="lineageos-camera-github"
+          fetch="https://github.com" />
+
+  <project path="prebuilts/linaro/linux-x86/aarch64/aarch64-linux-gnu"
+           name="LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.3.1"
+           remote="lineageos-camera-github"
+           revision="eb2998abfd6a9bacef48f0c4cdd4952aefffe7d4" />
 
   <project path="device/amazon/cronos" name="android_device_amazon_cronos" remote="amazon-oss" />
   <project path="device/amazon/checkers" name="android_device_amazon_checkers" remote="amazon-oss"

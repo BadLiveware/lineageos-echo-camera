@@ -24,7 +24,8 @@ Then extract only the Checkers-specific proprietary files and build. The manifes
 
 ```bash
 cd /path/to/lineage-18.1/device/amazon/checkers
-./extract-files.sh --only-target /path/to/compatible-system-dump
+./extract-files.sh /path/to/compatible-system-dump
+/path/to/lineageos-camera/scripts/verify-proprietary-files.sh /path/to/lineage-18.1
 
 cd /path/to/lineage-18.1
 source build/envsetup.sh

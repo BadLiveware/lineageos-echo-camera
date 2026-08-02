@@ -1301,6 +1301,16 @@ index 246881c886dafdd20741b4bfa70c38157aa6779f..c2b57b3e47f3510024b6e90c5e43285a
  # Bluetooth
  PRODUCT_PACKAGES += \
      android.hardware.bluetooth@1.0-service \
+diff --git c/extract-files.sh i/extract-files.sh
+index d5a74ac20e013679efcaff09e693b39438a1655e..9df313ae12c0c7d4ea591678cabcc829e00af0f6 100755
+--- c/extract-files.sh
++++ i/extract-files.sh
+@@ -29,4 +29,4 @@ export DEVICE=checkers
+ export DEVICE_COMMON=mt8163-common
+ export VENDOR=amazon
+ 
+-"./../../${VENDOR}/${DEVICE_COMMON}/extract-files.sh" "$@"
++"./../../${VENDOR}/${DEVICE_COMMON}/extract-files.sh" --only-target "$@"
 diff --git c/manifest_checkers.xml i/manifest_checkers.xml
 index b4ed7dd36cc17fa4498d6fa88294f459932452f6..dcf1fa7f103611bde3591fb05aa1b8d016c140cf 100644
 --- c/manifest_checkers.xml
