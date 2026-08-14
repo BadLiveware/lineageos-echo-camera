@@ -1,0 +1,16 @@
+diff --git c/src/com/android/camera/processing/imagebackend/TaskCompressImageToJpeg.java i/src/com/android/camera/processing/imagebackend/TaskCompressImageToJpeg.java
+index 7a2caf9fb72af52abae8b3186b2d1976434e067e..4b0b1861bf7ae738088478f9a53ec5904570ef69 100644
+--- c/src/com/android/camera/processing/imagebackend/TaskCompressImageToJpeg.java
++++ i/src/com/android/camera/processing/imagebackend/TaskCompressImageToJpeg.java
+@@ -420,7 +420,10 @@ public class TaskCompressImageToJpeg extends TaskJpegEncode {
+      * @return Quality level to use for JPEG compression.
+      */
+     protected int getJpegCompressionQuality () {
+-        return CameraProfile.getJpegEncodingQualityParameter(CameraProfile.QUALITY_HIGH);
++        int quality = CameraProfile.getJpegEncodingQualityParameter(CameraProfile.QUALITY_HIGH);
++        // The camera-id-free CameraProfile API returns 0 on front-camera-only devices.
++        // Bitmap JPEG recompression treats that as minimum quality, corrupting cropped photos.
++        return quality > 0 ? quality : 90;
+     }
+ 
+     /**

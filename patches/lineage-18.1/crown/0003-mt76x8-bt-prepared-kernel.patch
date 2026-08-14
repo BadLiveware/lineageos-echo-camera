@@ -1,0 +1,18 @@
+diff --git c/Android.mk i/Android.mk
+index 6c845c1cf3047aa5040dc2ac8b3d8db64c2942ff..87ef778ead779aab94284e5f8a1adeee275210f3 100644
+--- c/Android.mk
++++ i/Android.mk
+@@ -1,6 +1,12 @@
+ LOCAL_PATH := $(call my-dir)
+ 
+-ifeq ($(TARGET_PREBUILT_KERNEL),)
++ifneq ($(TARGET_PREBUILT_KERNEL),)
++ifneq ($(CROWN_PREPARED_KERNEL_OBJ),true)
++MT76X8_BT_SKIP_BUILD := true
++endif
++endif
++
++ifneq ($(MT76X8_BT_SKIP_BUILD),true)
+ MT76X8_BT_PATH := kernel/amazon/mt76x8-bt
+ 
+ include $(CLEAR_VARS)

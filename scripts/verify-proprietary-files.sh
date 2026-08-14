@@ -1,12 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 1 ]]; then
-  echo "usage: $0 ANDROID_SOURCE_ROOT" >&2
+if [[ $# -ne 2 ]]; then
+  echo "usage: $0 ANDROID_SOURCE_ROOT DEVICE" >&2
+  echo "DEVICE is one of: checkers, crown" >&2
   exit 2
 fi
 
 android_root=$(realpath "$1")
+device=$2
+case "$device" in
+  checkers|crown) ;;
+  *)
+    echo "unsupported device: $device" >&2
+    exit 2
+    ;;
+esac
 checked=0
 missing=0
 
@@ -43,7 +52,7 @@ check_list() {
 }
 
 check_list mt8163-common
-check_list checkers
+check_list "$device"
 
 if ((missing != 0)); then
   printf 'Proprietary extraction is incomplete: %d of %d files are missing.\n' \
@@ -51,4 +60,5 @@ if ((missing != 0)); then
   exit 1
 fi
 
-printf 'Verified %d proprietary files across mt8163-common and checkers.\n' "$checked"
+printf 'Verified %d proprietary files across mt8163-common and %s.\n' \
+  "$checked" "$device"

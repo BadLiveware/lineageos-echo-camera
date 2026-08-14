@@ -1,0 +1,18 @@
+diff --git c/Android.mk i/Android.mk
+index ff6a37a5dd920fd664504d437fd0522a43e238c1..66b77e0a62f51c620c84065aa6b2df1f7ab66b0b 100644
+--- c/Android.mk
++++ i/Android.mk
+@@ -1,6 +1,12 @@
+ LOCAL_PATH := $(call my-dir)
+ 
+-ifeq ($(TARGET_PREBUILT_KERNEL),)
++ifneq ($(TARGET_PREBUILT_KERNEL),)
++ifneq ($(CROWN_PREPARED_KERNEL_OBJ),true)
++MT76X8_WLAN_SKIP_BUILD := true
++endif
++endif
++
++ifneq ($(MT76X8_WLAN_SKIP_BUILD),true)
+ MT76X8_WLAN_PATH := kernel/amazon/mt76x8-wifi
+ 
+ include $(CLEAR_VARS)

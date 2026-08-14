@@ -1,0 +1,7 @@
+# order	project_path	upstream_url	branch	base_commit	patch	scope
+1	hardware/amazon	https://github.com/amazon-oss/android_hardware_amazon	lineage-18.1	03514731a4adef9fbca55a8a2fdf5a34d14ca9cc	shared/0001-hardware-amazon-camera-libui-compat.patch	.
+2	hardware/lineage/interfaces	https://github.com/LineageOS/android_hardware_lineage_interfaces	lineage-18.1	cfcb4c8a978a8627a5d6913089d9bb92d7356877	shared/0002-lineage-legacy-camera-preview-buffer.patch	.
+3	device/amazon/mt8163-common	https://github.com/amazon-oss/android_device_amazon_mt8163-common	lineage-18.1	30e0c8bb99a79e3366a62155ca4b00e1253caf4f	shared/0003-mt8163-front-camera-feature.patch	.
+4	packages/apps/Camera2	https://github.com/LineageOS/android_packages_apps_Camera2	lineage-18.1	ba73b97e236cb7bf15d91940b1639300298809e3	shared/0004-camera2-front-camera-jpeg-quality.patch	src/com/android/camera/processing/imagebackend/TaskCompressImageToJpeg.java
+5	device/amazon/checkers	https://github.com/amazon-oss/android_device_amazon_checkers	lineage-18.1	915cef5cae53c9aba0563b397bd8b6a13e5908be	checkers/0001-camera-provider-and-compat.patch	.
+6	packages/apps/Camera2	https://github.com/LineageOS/android_packages_apps_Camera2	lineage-18.1	ba73b97e236cb7bf15d91940b1639300298809e3	checkers/0002-camera2-layout-and-video-orientation.patch	src/com/android/camera/CaptureLayoutHelper.java,src/com/android/camera/VideoModule.java

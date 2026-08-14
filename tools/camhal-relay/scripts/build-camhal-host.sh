@@ -68,6 +68,17 @@ fi
   -llog \
   -o "$root/build/libshim_cmdq_path.so"
 
+"$cc" \
+  -std=c11 \
+  -O2 -g3 \
+  -Wall -Wextra -Werror \
+  -fPIC -shared \
+  -Wl,-soname,libcrown_imgsensor_compat.so \
+  "$root/src/crown_imgsensor_compat.c" \
+  -ldl \
+  -o "$root/build/libcrown_imgsensor_compat.so"
+
 file "$root/build/camhal_host" \
      "$root/build/libshim_dpframework.so" \
-     "$root/build/libshim_cmdq_path.so"
+     "$root/build/libshim_cmdq_path.so" \
+     "$root/build/libcrown_imgsensor_compat.so"

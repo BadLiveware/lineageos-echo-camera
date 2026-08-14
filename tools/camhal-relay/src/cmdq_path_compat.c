@@ -16,7 +16,7 @@ static const char *translate_path(const char *path) {
         unsigned int redirect =
             __atomic_add_fetch(&redirects, 1, __ATOMIC_RELAXED);
         if (redirect <= 3) {
-            __android_log_print(ANDROID_LOG_INFO, "CheckersCmdqCompat",
+            __android_log_print(ANDROID_LOG_INFO, "Mt8163CmdqCompat",
                                 "redirect %s to %s", LEGACY_CMDQ_PATH,
                                 CURRENT_CMDQ_PATH);
         }

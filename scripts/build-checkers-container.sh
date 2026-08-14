@@ -12,9 +12,9 @@ lineage_root=$1
 firmware_root=$2
 artifact_root=$3
 distribution_root=/opt/lineageos-camera
-pinned_manifest=manifests/lineage-18.1-checkers-pinned.xml
+pinned_manifest=manifests/checkers/lineage-18.1-pinned.xml
 manifest_repo_revision=fed547c557daea86389b10bf3e25ad6ae13114e2
-proprietary_checksums=manifests/checkers-proprietary-SHA256SUMS
+proprietary_checksums=manifests/checkers/proprietary-SHA256SUMS
 product_out=out/target/product/checkers
 
 required_firmware_file=system/vendor/lib/hw/camera.mt8163.so
@@ -85,16 +85,16 @@ fi
 
 # Preflight both independent patch sets before mutating any source project.
 "$distribution_root/scripts/apply-amazon-patches.sh" --check "$lineage_root"
-"$distribution_root/scripts/apply-patches.sh" --check "$lineage_root"
+"$distribution_root/scripts/apply-patches.sh" --check checkers "$lineage_root"
 "$distribution_root/scripts/apply-amazon-patches.sh" "$lineage_root"
-"$distribution_root/scripts/apply-patches.sh" "$lineage_root"
+"$distribution_root/scripts/apply-patches.sh" checkers "$lineage_root"
 
 (
     cd "$lineage_root/device/amazon/checkers"
     ./extract-files.sh "$firmware_root"
 )
 
-"$distribution_root/scripts/verify-proprietary-files.sh" "$lineage_root"
+"$distribution_root/scripts/verify-proprietary-files.sh" "$lineage_root" checkers
 (
     cd "$lineage_root"
     sha256sum -c "$distribution_root/$proprietary_checksums"

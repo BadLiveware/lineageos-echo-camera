@@ -1,86 +1,95 @@
-# LineageOS camera support for Amazon Checkers
+# LineageOS camera support for Amazon MT8163 devices
 
-This repository packages the camera bring-up for the Amazon Echo Show 5 (`checkers`) as a reproducible patch series for LineageOS 18.1. It includes the legacy camera provider integration, MediaTek compatibility shims, preview and orientation fixes, and system-wide AWB correction. The build also pins and applies Amazon-OSS's required baseline compatibility patch bundle, including fixed touchscreen-orientation support.
+This repository packages revision-pinned camera bring-up and reproducible LineageOS 18.1 builds for two Amazon Echo Show devices:
 
-No proprietary camera binaries are distributed. The build reads them from a compatible device or firmware dump supplied locally.
+- **Checkers** — Echo Show 5;
+- **Crown** — Echo Show 8.
 
-## Create a firmware dump
+The devices share the legacy Camera1/libui/Lineage preview compatibility layer and front-camera-only JPEG handling. Device directories isolate their provider integration, orientation behavior, proprietary contracts, manifests, kernel requirements, and documentation.
 
-From a rooted Checkers installation or recovery with ADB access, copy the system partition to a local directory:
+## Support status
 
-```bash
-export CHECKERS_FIRMWARE="$PWD/checkers-system-dump"
-mkdir -p "$CHECKERS_FIRMWARE"
+Crown photo mode is validated on physical hardware: the provider starts, preview has correct color and orientation, the conventional front-camera preview remains mirrored, and 1280×720 still captures are upright, unmirrored, and free from quality-zero JPEG corruption.
 
-adb root
-adb wait-for-device
-adb pull /system "$CHECKERS_FIRMWARE/"
+The existing Checkers patch and build path is preserved by the restructuring. It was not rebuilt or revalidated on hardware during the Crown bring-up; do not treat Crown validation as Checkers validation.
+
+## Repository layout
+
+```text
+patches/lineage-18.1/
+├── shared/       # patches used by both devices
+├── checkers/     # Checkers-only provider and Camera2 behavior
+└── crown/        # Crown-only provider and kernel-module behavior
+
+manifests/
+├── shared/       # common Amazon compatibility patch contract
+├── checkers/     # Checkers source and proprietary contracts
+└── crown/        # Crown source and proprietary contracts
 ```
 
-Fire OS stores the vendor files under `/system/vendor`. On installations with a separate `/vendor` partition, populate the same dump layout if the camera HAL was not included by the first pull:
+Each device has an ordered `series.tsv` that references shared patches first and device-specific patches second. Build caches and output directories are separate.
 
-```bash
-if [[ ! -f "$CHECKERS_FIRMWARE/system/vendor/lib/hw/camera.mt8163.so" ]]; then
-  mkdir -p "$CHECKERS_FIRMWARE/system/vendor"
-  adb pull /vendor/. "$CHECKERS_FIRMWARE/system/vendor/"
-fi
+## Prerequisites
 
-test -f "$CHECKERS_FIRMWARE/system/vendor/lib/hw/camera.mt8163.so"
-```
+- Docker with Buildx and the container driver;
+- an amd64 Linux builder;
+- enough storage for a LineageOS 18.1 checkout and build cache;
+- an authorized local firmware dump for the selected device, including its preserved `SHA256SUMS`.
 
-The dump remains local and is passed to BuildKit as a read-only build context.
+Create a reusable builder:
 
-## Build
-
-Requirements:
-
-- Docker Engine with Docker Buildx;
-- a trusted local Docker builder;
-- at least 200 GB available in Docker's storage;
-- a Checkers system dump containing `system/vendor/lib/hw/camera.mt8163.so`.
-
-Create a dedicated local builder, then run the build from this repository with a new build ID:
-
-```bash
+```sh
 docker buildx create \
-  --name checkers-builder \
+  --name lineageos-camera-builder \
   --driver docker-container \
-  --driver-opt image=moby/buildkit:v0.31.2@sha256:63db51c9b30208a7c2b1c40392c7ebb9ce2f85ba238a18a85420f8f5ea2d4684 \
-  --use unix:///var/run/docker.sock
+  --platform linux/amd64 \
+  --use
 docker buildx inspect --bootstrap
-
-export CHECKERS_FIRMWARE=/absolute/path/to/checkers-system-dump
-export CHECKERS_BUILD_ID=checkers-clean-$(date -u +%Y%m%dT%H%M%SZ)
-docker buildx bake --allow=fs.read="$CHECKERS_FIRMWARE" checkers
 ```
 
-The Bake target uses a pinned Ubuntu base image, dated package snapshot, and Android `repo` launcher. It syncs the pinned LineageOS sources and Amazon-OSS patch repository, verifies and applies the required Amazon baseline followed by the camera patch series, extracts and verifies all proprietary files, runs `m bacon`, and exports only the finished artifacts from a `scratch` stage.
+## Build Checkers
 
-A full clean build, including source sync, compilation, packaging, export, and checksum verification, took **1 hour 18 minutes on an AMD Ryzen AI Max+ 395**. First-build time will vary with network and storage performance; this measurement does not represent an incremental rebuild.
+```sh
+export CHECKERS_FIRMWARE=/absolute/path/to/checkers-system-dump
+export CHECKERS_BUILD_ID=checkers-$(date -u +%Y%m%dT%H%M%SZ)
 
-Artifacts are written to `dist/$CHECKERS_BUILD_ID`:
+docker buildx bake \
+  --allow=fs.read="$CHECKERS_FIRMWARE" \
+  --builder lineageos-camera-builder \
+  checkers
+```
 
-- `checkers-lineage-18.1.zip`;
-- `boot.img` and `recovery.img`;
-- `manifest.xml` with every synced project revision;
-- `PROPRIETARY_SHA256SUMS` identifying the exact blob set;
-- `SHA256SUMS`.
+Artifacts are exported to `dist/$CHECKERS_BUILD_ID`.
 
-See [installation and build instructions](docs/INSTALL.md) for the complete input, cache, and output contract.
+## Build Crown
 
-## Repository contents
+```sh
+export CROWN_FIRMWARE=/absolute/path/to/crown-system-dump
+export CROWN_BUILD_ID=crown-$(date -u +%Y%m%dT%H%M%SZ)
+```
 
-- [`Dockerfile`](Dockerfile) and [`docker-bake.hcl`](docker-bake.hcl) — isolated build environment and local artifact export
-- [`patches/lineage-18.1`](patches/lineage-18.1) — ordered project-specific camera patch bundle and checksums
-- [`manifests/amazon-oss-patches-lineage-18.1.tsv`](manifests/amazon-oss-patches-lineage-18.1.tsv) — exact Amazon baseline patch-to-project contract
-- [`scripts`](scripts) — container build, Amazon and camera patch preflight/application, regeneration, and validation
-- [`docs/PATCHES.md`](docs/PATCHES.md) — patch ownership and dependency map
-- [`docs/CALIBRATION.md`](docs/CALIBRATION.md) — AWB defaults and maintainer calibration boundary
-- [`docs/VALIDATION.md`](docs/VALIDATION.md) — build and on-device evidence
-- [`tools/camhal-relay`](tools/camhal-relay) — standalone legacy Camera1 HAL relay and diagnostic toolkit
+Review proprietary inputs, build focused camera modules, or build the complete package:
 
-## Compatibility boundary
+```sh
+docker buildx bake --allow=fs.read="$CROWN_FIRMWARE" \
+  --builder lineageos-camera-builder crown-checksums
 
-The Amazon baseline and camera patches target the exact LineageOS 18.1 bases in `manifests/amazon-oss-patches-lineage-18.1.tsv` and `patches/lineage-18.1/series.tsv`. The proprietary input contract is the Checkers blob set listed by `device/amazon/checkers/proprietary-files.txt`. The build rejects unknown source or patch-repository revisions, undeclared Amazon patches, patch mismatches, incomplete proprietary files, and missing output artifacts.
+docker buildx bake --allow=fs.read="$CROWN_FIRMWARE" \
+  --builder lineageos-camera-builder crown-modules
 
-The patch bundle is the maintained distribution format. Upstream pull requests can be prepared later if the relevant maintainers request them.
+docker buildx bake --allow=fs.read="$CROWN_FIRMWARE" \
+  --builder lineageos-camera-builder crown
+```
+
+Outputs use `dist/$CROWN_BUILD_ID-proprietary-review`, `dist/$CROWN_BUILD_ID-modules`, and `dist/$CROWN_BUILD_ID`.
+
+## Documentation
+
+- `docs/INSTALL.md` — firmware inputs, build commands, and artifacts;
+- `docs/PATCHES.md` — shared and device-specific ownership;
+- `docs/VALIDATION.md` — per-device validation status and limitations;
+- `docs/CALIBRATION.md` — Checkers AWB calibration reference;
+- `docs/CROWN_KERNEL_REPRODUCIBILITY.md` — Crown exact-kernel constraints;
+- `tools/camhal-relay/README.md` — low-level Camera1 HAL diagnostics.
+
+Proprietary Amazon and MediaTek binaries are not tracked. They must come from an authorized local firmware source and are verified before use.

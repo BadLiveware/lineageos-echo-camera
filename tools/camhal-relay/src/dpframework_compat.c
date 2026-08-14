@@ -73,7 +73,7 @@ static void register_proxy(void *legacy, void *current) {
     }
     pthread_mutex_unlock(&g_proxy_lock);
     if (available == DP_PROXY_CAPACITY) {
-        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
+        __android_log_print(ANDROID_LOG_ERROR, "Mt8163DpCompat",
                             "Dp proxy registry is full");
     }
 }
@@ -109,7 +109,7 @@ static void *unregister_proxy(void *legacy) {
 static void *resolve_next(const char *symbol) {
     void *function = dlsym(RTLD_NEXT, symbol);
     if (!function) {
-        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
+        __android_log_print(ANDROID_LOG_ERROR, "Mt8163DpCompat",
                             "missing next symbol %s: %s", symbol, dlerror());
     }
     return function;
@@ -122,7 +122,7 @@ static void construct_proxy(void *legacy_object, const char *constructor,
     }
     void *object = calloc(1, DP_PROXY_BYTES);
     if (!object) {
-        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat",
+        __android_log_print(ANDROID_LOG_ERROR, "Mt8163DpCompat",
                             "unable to allocate Dp proxy object");
         return;
     }
@@ -146,7 +146,7 @@ static void construct_proxy(void *legacy_object, const char *constructor,
     }
 
     register_proxy(legacy_object, object);
-    __android_log_print(ANDROID_LOG_INFO, "CheckersDpCompat",
+    __android_log_print(ANDROID_LOG_INFO, "Mt8163DpCompat",
                         "constructed proxy legacy=%p current=%p type=%d",
                         legacy_object, object, argument);
 }
@@ -167,7 +167,7 @@ static void destroy_proxy(void *legacy_object, const char *destructor) {
 #define REQUIRE_PROXY(legacy)                                      \
     void *current = proxy_object(legacy);                          \
     if (!current) {                                                \
-        __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat", \
+        __android_log_print(ANDROID_LOG_ERROR, "Mt8163DpCompat", \
                             "%s missing proxy for legacy object %p", \
                             __func__, (void *)(legacy));            \
         return -1;                                                  \
@@ -180,7 +180,7 @@ static void destroy_proxy(void *legacy_object, const char *destructor) {
             return -1;                                                 \
         dp_status_t call_result = function(__VA_ARGS__);               \
         if (call_result != 0)                                          \
-            __android_log_print(ANDROID_LOG_ERROR, "CheckersDpCompat", \
+            __android_log_print(ANDROID_LOG_ERROR, "Mt8163DpCompat", \
                                 "%s returned %d", __func__,           \
                                 call_result);                           \
         return call_result;                                            \
