@@ -49,6 +49,7 @@ RUN printf '%s\n' \
         squashfs-tools \
         unzip \
         xsltproc \
+        xz-utils \
         zip \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
@@ -84,6 +85,30 @@ RUN --mount=type=cache,id=${LINEAGE_CACHE_ID},target=/workspace,sharing=locked \
         /workspace/lineage-18.1 \
         /firmware \
         /artifacts
+
+FROM build-env-check AS crown-builder
+WORKDIR /opt/lineageos-camera
+COPY manifests/ manifests/
+COPY patches/ patches/
+COPY scripts/apply-amazon-patches.sh \
+     scripts/apply-patches.sh \
+     scripts/build-crown-container.sh \
+     scripts/verify-firmware-inputs.py \
+     scripts/verify-proprietary-files.sh \
+     scripts/
+
+ARG CROWN_CACHE_ID=lineageos-crown
+ARG CROWN_BUILD_MODE=full
+RUN --mount=type=cache,id=${CROWN_CACHE_ID},target=/home/r0rt1z2,sharing=locked \
+    --mount=type=bind,from=firmware,target=/firmware,readonly \
+    /opt/lineageos-camera/scripts/build-crown-container.sh \
+        /home/r0rt1z2/lineage-18.1 \
+        /firmware \
+        /artifacts \
+        ${CROWN_BUILD_MODE}
+
+FROM scratch AS crown-artifacts
+COPY --from=crown-builder /artifacts/ /
 
 FROM scratch AS artifacts
 COPY --from=builder /artifacts/ /

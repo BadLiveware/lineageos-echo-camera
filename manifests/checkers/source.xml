@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest>
+  <remote name="amazon-oss"
+          fetch="https://github.com/amazon-oss"
+          revision="refs/heads/lineage-18.1" />
+  <remote name="lineageos-camera-github"
+          fetch="https://github.com" />
+
+  <project path="prebuilts/linaro/linux-x86/aarch64/aarch64-linux-gnu"
+           name="LineageOS/android_prebuilts_gcc_linux-x86_aarch64_aarch64-linux-gnu-6.3.1"
+           remote="lineageos-camera-github"
+           revision="eb2998abfd6a9bacef48f0c4cdd4952aefffe7d4" />
+
+  <project path="device/amazon/cronos" name="android_device_amazon_cronos" remote="amazon-oss" />
+  <project path="device/amazon/checkers" name="android_device_amazon_checkers" remote="amazon-oss"
+           revision="915cef5cae53c9aba0563b397bd8b6a13e5908be" />
+  <project path="device/amazon/rook" name="android_device_amazon_rook" remote="amazon-oss" />
+
+  <project path="device/amazon/mt8163-common" name="android_device_amazon_mt8163-common" remote="amazon-oss"
+           revision="30e0c8bb99a79e3366a62155ca4b00e1253caf4f" />
+
+  <project path="kernel/amazon/mt8163-4.9" name="android_kernel_amazon_mt8163" remote="amazon-oss" />
+  <project path="kernel/amazon/mt66xx-common" name="android_kernel_amazon_mt66xx-common" remote="amazon-oss" />
+  <project path="kernel/amazon/mt66xx-bt" name="android_kernel_amazon_mt66xx-bt" remote="amazon-oss" />
+  <project path="kernel/amazon/mt66xx-wifi" name="android_kernel_amazon_mt66xx-wifi" remote="amazon-oss" />
+  <project path="kernel/amazon/mt76x8-bt" name="android_kernel_amazon_mt76x8-bt" remote="amazon-oss" />
+  <project path="kernel/amazon/mt76x8-wifi" name="android_kernel_amazon_mt76x8-wifi" remote="amazon-oss" />
+
+  <project path="hardware/amazon" name="android_hardware_amazon" remote="amazon-oss"
+           revision="03514731a4adef9fbca55a8a2fdf5a34d14ca9cc" />
+  <!-- Checkers uses MT76xx; the upstream MT66xx hardware repo is unpublished. -->
+  <project path="hardware/mediatek/mt76xx" name="android_hardware_mediatek_mt76xx" remote="amazon-oss" />
+
+  <!-- Required compatibility backports; apply through scripts/apply-amazon-patches.sh. -->
+  <project path="patches" name="patches" remote="amazon-oss"
+           revision="e2060e7985fdf61ebd0663f170aed8609dbb5e1e" />
+
+  <project path="vendor/amazon/cronos" name="android_vendor_amazon_cronos" remote="amazon-oss" />
+  <project path="vendor/amazon/checkers" name="android_vendor_amazon_checkers" remote="amazon-oss"
+           revision="353b69abbb125a8fa9fdddd1fbee76d275aafbed" />
+  <project path="vendor/amazon/rook" name="android_vendor_amazon_rook" remote="amazon-oss" />
+  <project path="vendor/amazon/mt8163-common" name="android_vendor_amazon_mt8163-common" remote="amazon-oss" />
+
+  <extend-project name="LineageOS/android_hardware_lineage_interfaces"
+                  path="hardware/lineage/interfaces"
+                  revision="cfcb4c8a978a8627a5d6913089d9bb92d7356877" />
+  <extend-project name="LineageOS/android_packages_apps_Camera2"
+                  path="packages/apps/Camera2"
+                  revision="ba73b97e236cb7bf15d91940b1639300298809e3" />
+</manifest>

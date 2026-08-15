@@ -15,7 +15,7 @@ fi
 
 android_root=$(realpath "$1")
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-series="$repo_root/manifests/amazon-oss-patches-lineage-18.1.tsv"
+series="$repo_root/manifests/shared/amazon-oss-patches-lineage-18.1.tsv"
 patch_repo="$android_root/patches"
 expected_patch_revision=e2060e7985fdf61ebd0663f170aed8609dbb5e1e
 

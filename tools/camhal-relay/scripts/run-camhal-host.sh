@@ -5,11 +5,38 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 mode=${1:-enumerate}
 camera_id=${2:-0}
 remote=${CAMHAL_REMOTE_DIR:-/data/local/tmp/camprobe}
+remote=${remote%/}
 dp_mode=${CAMHAL_DP_MODE:-android9}
+imgsensor_mode=${CAMHAL_IMGSENSOR_COMPAT:-auto}
 relay_socket=${CAMHAL_RELAY_SOCKET:-$remote/camrelay.sock}
 relay_port=${CAMHAL_RELAY_PORT:-57321}
 relay_seconds=${CAMHAL_RELAY_SECONDS:-20}
 relay_frames=${CAMHAL_RELAY_FRAMES:-120}
+case "$remote" in
+  /*) ;;
+  *)
+    echo "CAMHAL_REMOTE_DIR must be an absolute path" >&2
+    exit 2
+    ;;
+esac
+case "/$remote/" in
+  */../*|*/./*)
+    echo "CAMHAL_REMOTE_DIR must not contain '.' or '..' components" >&2
+    exit 2
+    ;;
+esac
+case "$relay_socket" in
+  "$remote"/*) relay_socket_name=${relay_socket#"$remote"/} ;;
+  *)
+    echo "CAMHAL_RELAY_SOCKET must be directly under $remote" >&2
+    exit 2
+    ;;
+esac
+if [[ -z "$relay_socket_name" || "$relay_socket_name" == */* ||
+      "$relay_socket_name" == . || "$relay_socket_name" == .. ]]; then
+  echo "CAMHAL_RELAY_SOCKET must name one file directly under $remote" >&2
+  exit 2
+fi
 case "$mode" in
   enumerate|open|parameters|capture-one|relay|close) ;;
   *)
@@ -32,10 +59,36 @@ cleanup_relay() {
 trap cleanup_relay EXIT
 
 mkdir -p "$root/results"
+adb_uid=$(adb shell id -u | tr -d '\r')
+if [[ "$adb_uid" != 0 ]]; then
+  echo "camhal relay requires root adbd; run 'adb root' first" >&2
+  exit 1
+fi
 "$root/scripts/build-camhal-host.sh"
 adb push "$root/build/camhal_host" "$remote/camhal_host" >/dev/null
 adb push "$root/build/libshim_dpframework.so" "$remote/libshim_dpframework.so" >/dev/null
 adb push "$root/build/libshim_cmdq_path.so" "$remote/libshim_cmdq_path.so" >/dev/null
+imgsensor_preload=""
+case "$imgsensor_mode" in
+  auto)
+    product_device=$(adb shell getprop ro.product.device | tr -d '\r')
+    if [[ "$product_device" == crown ]]; then
+      imgsensor_mode=crown
+    else
+      imgsensor_mode=none
+    fi
+    ;;
+  crown|none) ;;
+  *)
+    echo "Unsupported CAMHAL_IMGSENSOR_COMPAT: $imgsensor_mode" >&2
+    exit 2
+    ;;
+esac
+if [[ "$imgsensor_mode" == crown ]]; then
+  adb push "$root/build/libcrown_imgsensor_compat.so" \
+    "$remote/libcrown_imgsensor_compat.so" >/dev/null
+  imgsensor_preload="$remote/libcrown_imgsensor_compat.so "
+fi
 case "$dp_mode" in
   android7)
     adb shell "
@@ -73,7 +126,7 @@ fi
 set +e
 adb shell "
   export LD_LIBRARY_PATH='$remote/vendor/lib:$remote/system/lib:/vendor/lib:/system/lib'
-  export LD_PRELOAD='/system/lib/libsensor.so $remote/libshim_graphic_buffer.so $remote/libshim_checkers_extra.so$dp_preload'
+  export LD_PRELOAD='${imgsensor_preload}/system/lib/libsensor.so $remote/libshim_graphic_buffer.so $remote/libshim_mt8163_extra.so$dp_preload'
   export CAMERA_HAL_PATH='$remote/vendor/lib/hw/camera.mt8163.so'
   export CAMHAL_RELAY_SOCKET='$relay_socket'
   export CAMHAL_RELAY_SECONDS='$relay_seconds'

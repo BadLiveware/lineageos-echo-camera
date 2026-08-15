@@ -1,89 +1,112 @@
-# Build the Checkers LineageOS image
+# Build LineageOS camera support
 
-The supported build runs entirely through Docker Buildx Bake. The host supplies Docker, disk space, and a lawful local firmware dump; the container supplies the LineageOS source checkout and build dependencies.
+The container pipeline pins Android source revisions, applies the selected device's ordered patch series, verifies proprietary inputs, and exports reproducible artifacts.
 
-## Prerequisites
+## Prepare firmware input
 
-- Docker Engine with the `docker buildx` plugin;
-- a trusted local Linux AMD64 Docker builder;
-- at least 200 GB available in Docker's storage;
-- a compatible Checkers system dump.
-
-The firmware path must be an extracted directory with this file:
+Use an authorized firmware dump for the selected device and preserve the original directory layout:
 
 ```text
-system/vendor/lib/hw/camera.mt8163.so
+<device>-system-dump/
+└── system/
+    └── vendor/
+        └── lib/
+            └── hw/
+                └── camera.mt8163.so
 ```
 
-The build does not copy the firmware dump into the exported artifact stage. BuildKit sends named contexts to the selected builder, so use a trusted local builder and never select a remote or shared builder for this build.
+The Crown pipeline additionally requires the dump's preserved `SHA256SUMS` file. The Checkers pipeline verifies extracted files against the repository manifest and does not read a dump-side checksum file.
 
-## Build
+If `/vendor` is exposed separately, place its content below `system/vendor` in the dump.
 
-Create a dedicated builder backed by the local Docker Engine:
+## Create the builder
 
-```bash
+```sh
 docker buildx create \
-  --name checkers-builder \
+  --name lineageos-camera-builder \
   --driver docker-container \
-  --driver-opt image=moby/buildkit:v0.31.2@sha256:63db51c9b30208a7c2b1c40392c7ebb9ce2f85ba238a18a85420f8f5ea2d4684 \
-  --use unix:///var/run/docker.sock
+  --platform linux/amd64 \
+  --use
 docker buildx inspect --bootstrap
 ```
 
-The inspection must show the `docker-container` driver and `unix:///var/run/docker.sock` endpoint. From the repository root, export a new build ID and run the Bake target:
+The Buildx cache contains the LineageOS checkout and compiled objects. Device build IDs intentionally select separate caches.
 
-```bash
+## Checkers build
+
+```sh
 export CHECKERS_FIRMWARE=/absolute/path/to/checkers-system-dump
-export CHECKERS_BUILD_ID=checkers-clean-$(date -u +%Y%m%dT%H%M%SZ)
-docker buildx bake --allow=fs.read="$CHECKERS_FIRMWARE" checkers
+export CHECKERS_BUILD_ID=checkers-$(date -u +%Y%m%dT%H%M%SZ)
+
+docker buildx bake \
+  --allow=fs.read="$CHECKERS_FIRMWARE" \
+  --builder lineageos-camera-builder \
+  checkers
 ```
 
-The filesystem entitlement grants the selected local builder read access only to the firmware directory. A new build ID creates a new BuildKit cache and output directory; use both a new builder and build ID for a clean-room validation build.
+The complete package is exported under `dist/$CHECKERS_BUILD_ID`.
 
-The target performs the complete workflow:
+## Crown builds
 
-1. initializes LineageOS 18.1 from the repository's fully revision-locked manifest;
-2. syncs every source project and the Amazon-OSS patch repository at their recorded commits;
-3. verifies and applies all six required Amazon-OSS compatibility patches;
-4. verifies and applies the five project-specific camera patches;
-5. extracts the Checkers proprietary files without replacing the shared MT8163 vendor tree;
-6. verifies every proprietary file referenced by both vendor trees;
-7. runs `lunch lineage_checkers-userdebug` and `m bacon`;
-8. exports the OTA, partition images, pinned manifest, and checksums from a `scratch` stage.
-
-Any failed step stops the build. Do not repair files inside the BuildKit cache; fix the manifest, patch bundle, extraction input, or container definition and run with a new build ID.
-
-## Output
-
-The local exporter writes to:
-
-```text
-dist/$CHECKERS_BUILD_ID/
+```sh
+export CROWN_FIRMWARE=/absolute/path/to/crown-system-dump
+export CROWN_BUILD_ID=crown-$(date -u +%Y%m%dT%H%M%SZ)
 ```
 
-Expected files:
+Checksum review only:
+
+```sh
+docker buildx bake --allow=fs.read="$CROWN_FIRMWARE" \
+  --builder lineageos-camera-builder crown-checksums
+```
+
+Provider, compatibility library, and Camera2 APK:
+
+```sh
+docker buildx bake --allow=fs.read="$CROWN_FIRMWARE" \
+  --builder lineageos-camera-builder crown-modules
+```
+
+Complete LineageOS package:
+
+```sh
+docker buildx bake --allow=fs.read="$CROWN_FIRMWARE" \
+  --builder lineageos-camera-builder crown
+```
+
+## Pipeline guarantees
+
+Both pipelines:
+
+1. initialize the device's pinned LineageOS 18.1 manifest;
+2. restore every cached source project to its recorded revision;
+3. validate and apply the shared Amazon compatibility patches;
+4. validate and apply the selected device series;
+5. verify the device's proprietary closure;
+6. build the selected product in `userdebug` mode.
+
+Crown additionally supports a checksum-only review and a focused module build. Its full build reproduces the verified Crown kernel and checks boot, recovery, target-files, and OTA image identity.
+
+## Outputs
+
+A complete build exports the OTA, boot and recovery images, source/proprietary provenance, pinned manifest, and `SHA256SUMS`. Crown module builds export:
 
 ```text
-OTA_SOURCE_NAME
-PROPRIETARY_SHA256SUMS
-SHA256SUMS
-boot.img
-checkers-lineage-18.1.zip
+android.hardware.camera.provider@2.4-service.crown
+libcrown_camera_compat.so
+Camera2.apk
+MODULE_BUILD_RESULT
+FIRMWARE_MANIFEST_SHA256
+OUTPUT_SHA256SUMS
+SOURCE_INPUT_MAP.tsv
 manifest.xml
-recovery.img
 ```
 
-Verify the exported files before installation:
+Verify any export containing `SHA256SUMS` before installation:
 
-```bash
-cd dist/$CHECKERS_BUILD_ID
+```sh
+cd dist/<build-id>
 sha256sum -c SHA256SUMS
 ```
 
-`checkers-lineage-18.1.zip` is the OTA package. Its compressed block payload carries the system partition; the Checkers `bacon` target does not emit a separate top-level `system.img`. `OTA_SOURCE_NAME` records the package's original generated filename. `PROPRIETARY_SHA256SUMS` records the exact proprietary payload accepted by the build.
-
-After exporting and verifying the artifacts, remove the dedicated builder to delete its source cache and local firmware context:
-
-```bash
-docker buildx rm checkers-builder
-```
+Building does not authorize deployment. Installation modifies device partitions and should use the device's established recovery or rooted-ADB procedure only after artifact review.

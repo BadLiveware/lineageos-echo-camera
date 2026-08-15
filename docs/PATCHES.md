@@ -1,61 +1,62 @@
-# Patch ownership and dependencies
+# Patch architecture
 
-## Amazon-OSS baseline
+The repository keeps shared MT8163/Lineage compatibility separate from device behavior. Each device owns an ordered `series.tsv` rooted at exact upstream commits:
 
-Amazon-OSS's supported LineageOS 18.1 setup syncs its `patches` repository and requires running `./patches/apply.sh` after every fresh source sync. The container preserves that dependency without invoking the mutation-first upstream helper: `scripts/apply-amazon-patches.sh` verifies the pinned patch-repository revision, checks that its complete patch inventory is declared, preflights every target, and then applies the patches as worktree changes.
+- `patches/lineage-18.1/checkers/series.tsv`;
+- `patches/lineage-18.1/crown/series.tsv`.
 
-The pinned Amazon baseline contains six compatibility patches:
+## Shared patches
 
 | Android project | Responsibility |
 |---|---|
-| `bionic` | Makes fdsan warn once instead of terminating legacy vendor processes. |
-| `frameworks/av` | Avoids crashing media processes on `TimeCheck` timeout. |
-| `frameworks/base` | Makes brightness gamma conversion configurable for these displays. |
-| `frameworks/native` | Backports IDC `touch.orientation` handling required by the rotated Checkers panel. |
-| `frameworks/opt/net/wifi` | Adds an overlay switch for SHA-256 key-management support. |
-| `packages/apps/Settings` | Keeps “Display over other apps” available on low-RAM devices. |
+| `hardware/amazon` | Adapts legacy camera code to the current libui boundary. |
+| `hardware/lineage/interfaces` | Enables the MediaTek legacy preview-buffer adapter. |
+| `device/amazon/mt8163-common` | Declares front-camera-only hardware. |
+| `packages/apps/Camera2` | Prevents quality-zero JPEG recompression when no back camera exists. |
 
-The source-project bases and upstream patch paths are machine-readable in `manifests/amazon-oss-patches-lineage-18.1.tsv`. The Amazon patch repository itself is locked in the full source manifest.
+Shared payloads live in `patches/lineage-18.1/shared/` and are referenced directly by both device series.
 
-## Camera bring-up
+## Checkers ownership
 
-The project-specific camera bring-up crosses five source projects. Each patch is rooted at an exact upstream commit and can be inspected or applied independently with ordinary Git tooling.
+Checkers owns:
 
-| Order | Android project | Responsibility |
-|---:|---|---|
-| 1 | `hardware/amazon` | Exposes the legacy libui wrapper behavior required by the vendor camera stack. |
-| 2 | `hardware/lineage/interfaces` | Adds an opt-in MediaTek legacy preview-buffer adapter to the Lineage legacy camera provider/device implementation. |
-| 3 | `device/amazon/mt8163-common` | Advertises the correct front-camera-only hardware feature. |
-| 4 | `device/amazon/checkers` | Installs the provider, compatibility shims, mount/orientation behavior, proprietary-file manifest, SELinux label, and AWB defaults. |
-| 5 | `packages/apps/Camera2` | Corrects the ultrawide preview layout and applies the device video-orientation offset. |
+- its legacy provider and DpFramework compatibility integration;
+- camera mount, capture rotation and flip behavior;
+- AWB hooks and calibration defaults;
+- Camera2 ultrawide preview layout and video-orientation offset.
 
-Exact upstream URLs, branches, bases, and patch filenames are machine-readable in `patches/lineage-18.1/series.tsv`.
+Its proprietary and source contracts live under `manifests/checkers/`. `docs/CALIBRATION.md` documents the Checkers-only AWB behavior.
 
-## Proprietary vendor tree
+## Crown ownership
 
-`vendor/amazon/checkers` is deliberately absent from the patch series. Its camera closure consists of generated makefiles and proprietary binaries extracted from a compatible device or firmware source. Patch 4 updates the extraction manifest and makes `device/amazon/checkers/extract-files.sh SOURCE` regenerate only the Checkers vendor tree by default.
+Crown owns:
 
-The local manifest supplies the shared `vendor/amazon/mt8163-common` tree, which the Checkers extraction wrapper leaves unchanged.
+- its legacy provider and camera compatibility library;
+- legacy imgsensor ioctl translation to the verified v0.4 kernel ABI;
+- system-Binder access required by `sensorservice`;
+- disabling unusable temporal shading while preserving static lens shading;
+- separate preview-port and still-capture rotation corrections;
+- prepared-kernel integration for MT76x8 Wi-Fi and Bluetooth modules.
 
-This keeps the public repository useful without redistributing additional Amazon or MediaTek binaries.
+Its proprietary and source contracts live under `manifests/crown/`. Crown does not inherit Checkers AWB, capture-flip, or video-offset behavior.
 
-## Runtime architecture
+## Series and scope invariants
 
-The Android 7-era Camera1 blobs run behind a dedicated legacy HIDL provider on LineageOS 18.1. Compatibility code in the Checkers device tree handles three device-specific boundaries:
+Each `series.tsv` records:
 
-1. old DpIsp/DpBlit object sizes and Android 9 `libdpframework` calls;
-2. the sensor's upside-down physical mount and output orientation;
-3. final ISP AWB gain trimming through explicit PLT replacement of MediaTek `setAWBGain` call sites.
-
-The AWB wrappers remain local ELF symbols. Exporting the proprietary C++ names causes Android's linker to preempt unresolved blob calls before the original targets are captured, which makes unity trim fail with a severe green cast. Explicit PLT replacement preserves the original call and avoids output-buffer compounding.
-
-## Regenerating the bundle
-
-`regenerate-patches.sh` uses an alternate Git index for every Android project. It captures committed, modified, and untracked non-ignored files relative to the recorded base without staging or changing the development checkout. New payloads and checksums are built in a sibling staging directory and replace the published bundle only after the complete series succeeds.
-
-```bash
-./scripts/regenerate-patches.sh /path/to/lineage-18.1-development-tree
-./scripts/validate-patch-bundle.sh /path/to/lineage-18.1-development-tree
+```text
+order  project_path  upstream_url  branch  base_commit  patch  scope
 ```
 
-Update `series.tsv` first when an upstream base changes. Validation creates detached temporary worktrees at every recorded base and applies the generated patches there.
+`scope` assigns source files to a patch generator. This lets the shared Camera2 JPEG fix and Checkers-only Camera2 UI/video changes remain separate even though they modify the same Android project.
+
+The patch scripts enforce these invariants:
+
+- every source project is at the recorded base and clean before application;
+- repeated project entries use one base and apply sequentially;
+- all payloads match `SHA256SUMS`;
+- generated patches include only their declared source scope.
+
+## Proprietary boundary
+
+`vendor/amazon/checkers` and `vendor/amazon/crown` are generated from authorized local firmware sources and are not tracked. Each build selects only its device contract and verifies the extracted closure before compilation.

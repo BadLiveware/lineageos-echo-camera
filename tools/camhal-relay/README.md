@@ -1,141 +1,77 @@
-# Checkers camera relay toolkit
+# MT8163 Camera1 HAL diagnostic relay
 
-This maintainer tool runs the stock Checkers Camera1 HAL from `/data/local/tmp/camprobe` without installing a camera provider or modifying System/Vendor. It captures 640x480 NV21 frames through the Android 9-compatible `libdpframework` bridge.
+This harness loads the legacy 32-bit Camera1 HAL outside Android's camera service for bounded enumeration, parameter, capture, and preview-frame experiments on Checkers or Crown. It is a diagnostic tool; production uses each device's HIDL provider.
 
-Run the commands below from `tools/camhal-relay`.
+## Safety
 
-## Capture one frame
+MediaTek camera initialization can write calibration state. Use a rooted test device, preserve `/persist` and `/data/nvram`, and snapshot state around experiments:
 
-Prerequisites:
-
-- rooted ADB access to the device;
-- `ANDROID_NDK_HOME` or `ANDROID_NDK_ROOT` pointing to an installed NDK;
-- the stock blob tree staged under `/data/local/tmp/camprobe`;
-- the device-specific graphics and sensor shims from the workspace setup.
-
-```bash
-CAMHAL_DP_MODE=android9 ./scripts/run-camhal-host.sh capture-one 0
-adb pull /data/local/tmp/camprobe/frame-640x480.nv21 results/frame.nv21
-
-ffplay -f rawvideo -pixel_format nv21 -video_size 640x480 results/frame.nv21
+```sh
+adb root
+adb wait-for-device
+tools/camhal-relay/scripts/snapshot-device-camera-state.sh device-pre
 ```
 
-The build script reads `/system/vendor/lib/libdpframework.so` from the connected device so the compatibility shim links against the exact runtime library. For an offline rebuild, set `CAMHAL_DP_LIBRARY` to a previously pulled exact copy.
+Do not run the host harness while Android's camera provider owns the HAL.
 
-## Run the bounded frame relay
+## Build
 
-Terminal 1 starts the HAL and creates an ADB forward. By default it must deliver 120 frames before the 20-second deadline on TCP port 57321. Reaching the deadline with fewer frames is a failed run, so the producer and receiver cannot report contradictory success.
+Install Android NDK r27d or a compatible NDK:
 
-```bash
-CAMHAL_RELAY_FRAMES=120 \
-CAMHAL_RELAY_SECONDS=20 \
-CAMHAL_RELAY_PORT=57321 \
-./scripts/run-camhal-host.sh relay 0
+```sh
+export ANDROID_NDK_HOME=/absolute/path/to/android-ndk-r27d
+tools/camhal-relay/scripts/build-camhal-host.sh
 ```
 
-Terminal 2 receives framed NV21 payloads:
+The build produces the host executable, shared DpFramework/CMDQ shims, and Crown's optional imgsensor ABI translator. It pulls the connected device's current `libdpframework.so` unless `CAMHAL_DP_LIBRARY` points to an exact offline copy.
 
-```bash
-./scripts/receive-camhal-relay.py \
-  --port 57321 \
-  --frames 120 \
-  --output-dir results/relay
-```
+## Stage device libraries
 
-The device keeps at most one partially transmitted frame. Socket writes are nonblocking; if the pending packet cannot advance, the next camera callback is dropped rather than blocking the HAL. `dropped_frames` in each header is cumulative and includes frames produced before a client connects. Start the receiver promptly enough to meet the configured deadline.
-
-### Relay wire format
-
-Each frame is a packed 44-byte little-endian header followed by `payload_bytes` of NV21 data.
-
-| Offset | Type | Field |
-| ---: | --- | --- |
-| 0 | `uint32` | Magic `CRLY` (`0x594c5243`) |
-| 4 | `uint16` | Protocol version, currently 1 |
-| 6 | `uint16` | Header size, currently 44 |
-| 8 | `uint64` | Delivered-frame sequence |
-| 16 | `uint64` | Monotonic timestamp in nanoseconds |
-| 24 | `uint32` | Width, currently 640 |
-| 28 | `uint32` | Height, currently 480 |
-| 32 | `uint32` | Pixel format `NV21` (`0x3132564e`) |
-| 36 | `uint32` | Payload size, currently 460800 bytes |
-| 40 | `uint32` | Cumulative dropped-frame count |
-
-## Validate powered-down state
-
-Capture state before and after each operation class:
-
-```bash
-./scripts/snapshot-device-camera-state.sh results/check-pre
-# Run capture-one or relay.
-./scripts/snapshot-device-camera-state.sh results/check-post
-
-diff -u results/check-pre.nvram.sha256 results/check-post.nvram.sha256
-```
-
-A recovered device should show:
-
-- no `camhal_host` process;
-- no open descriptors for `/dev/camera-*`, `/dev/kd_camera_hw`, ISP, or SENINF devices;
-- `img_cam_*`, `img_sen_cam`, `mm_cam_mdp`, `camtg_sel`, and `scam_sel` clock counts at zero;
-- the `isp` generic power domain as `off-0`;
-- no relay socket and no relay ADB forward.
-
-Compare regulator snapshots rather than requiring every camera-named regulator to read zero: `vcamaf` has a device baseline user independent of this fixed-focus sensor.
-
-## Stop and clean up
-
-The runner removes its ADB forward and relay socket on normal exit, timeout, or shell interruption. If the runner itself is killed externally, remove only the relay runtime state manually:
-
-```bash
-adb shell 'pkill -9 camhal_host 2>/dev/null || true; rm -f /data/local/tmp/camprobe/camrelay.sock'
-adb forward --remove tcp:57321 2>/dev/null || true
-```
-
-Remove the entire disposable device experiment only after preserving any wanted frames or logs:
-
-```bash
-adb shell 'rm -rf /data/local/tmp/camprobe'
-```
-
-No System/Vendor cleanup is required because these scripts do not install files there.
-
-## Restore persistent camera state
-
-The verified rollback point is:
+The runner expects a private directory, defaulting to `/data/local/tmp/camprobe`, containing the selected device's camera closure and shared compatibility shims:
 
 ```text
-backups/checkers-20260731-152344/
+vendor/lib/hw/camera.mt8163.so
+system/lib/libsensor.so
+libshim_graphic_buffer.so
+libshim_mt8163_extra.so
 ```
 
-Verify it on the host before use:
+The repository does not distribute proprietary libraries. Device-specific files must come from the corresponding firmware source; do not mix Checkers and Crown camera closures.
 
-```bash
-cd backups/checkers-20260731-152344
-sha256sum -c SHA256SUMS
+## Run bounded commands
+
+```sh
+tools/camhal-relay/scripts/run-camhal-host.sh enumerate 0
+tools/camhal-relay/scripts/run-camhal-host.sh open 0
+tools/camhal-relay/scripts/run-camhal-host.sh parameters 0
+tools/camhal-relay/scripts/run-camhal-host.sh capture-one 0
 ```
 
-Restore only from recovery with Android and NVRAM services stopped. Preserve the current state first. A typical recovery sequence is:
+| Variable | Default | Purpose |
+|---|---|---|
+| `CAMHAL_REMOTE_DIR` | `/data/local/tmp/camprobe` | Private device staging directory. |
+| `CAMHAL_DP_MODE` | `android9` | Selects proxied Android 9 or staged Android 7 DpFramework. |
+| `CAMHAL_IMGSENSOR_COMPAT` | `auto` | Enables Crown's imgsensor translator when `ro.product.device=crown`; use `none` for Checkers. |
+| `CAMHAL_RELAY_SECONDS` | `20` | Maximum preview relay duration. |
+| `CAMHAL_RELAY_FRAMES` | `120` | Maximum relayed frame count. |
+| `CAMHAL_RELAY_PORT` | `57321` | Host TCP port forwarded to the device socket. |
 
-```bash
-adb push data-nvram.tar /tmp/data-nvram.tar
-adb push persist.img /tmp/persist.img
-adb shell
+## Receive preview frames
 
-mount /data
-mv /data/nvram /data/nvram.pre-camera-restore
-mkdir -p /data/nvram
-tar -xpf /tmp/data-nvram.tar -C /data
-restorecon -RF /data/nvram
-sync
+Start the relay:
+
+```sh
+CAMHAL_RELAY_SECONDS=20 CAMHAL_RELAY_FRAMES=120 \
+  tools/camhal-relay/scripts/run-camhal-host.sh relay 0
 ```
 
-Restore the separate Persist partition only when its contents are known to be the problem:
+Receive frames in another terminal:
 
-```bash
-# Recovery only. Confirm /dev/block/by-name/persist identifies the 16 MiB partition.
-dd if=/tmp/persist.img of=/dev/block/by-name/persist bs=4M conv=fsync
-sync
+```sh
+tools/camhal-relay/scripts/receive-camhal-relay.py \
+  --host 127.0.0.1 \
+  --port 57321 \
+  --output tools/camhal-relay/results/device-relay
 ```
 
-Do not write `persist.img` while Android is running. Keep `/data/nvram.pre-camera-restore` until the restored system has booted and its NVRAM hashes, Wi-Fi/Bluetooth identity, and camera enumeration have been verified.
+The receiver stores NV21 frames and reports sequence gaps or malformed payloads. Keep result names device-specific; `results/` is ignored because it may contain device-derived data.
