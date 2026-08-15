@@ -11,7 +11,7 @@ The devices share the legacy Camera1/libui/Lineage preview compatibility layer a
 
 Crown photo mode is validated on physical hardware: the provider starts, preview has correct color and orientation, the conventional front-camera preview remains mirrored, and 1280×720 still captures are upright, unmirrored, and free from quality-zero JPEG corruption.
 
-The `checkers-camera-dev-ota-r5` build was tested on physical hardware: touch orientation works, but the camera does not. Treat it only as touch-behavior evidence, not as a camera-working Checkers baseline.
+Checkers was also rebuilt and validated on physical hardware after the restructuring: preview and 1280×720 JPEG capture are upright, 1280×720 video renders upright with the expected orientation metadata, camera services remain stable, and touch mapping is correct.
 
 ## Repository layout
 

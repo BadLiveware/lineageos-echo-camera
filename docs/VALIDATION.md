@@ -22,9 +22,17 @@ Video recording was not part of Crown's final acceptance run and remains unverif
 
 ## Checkers
 
-The `checkers-camera-dev-ota-r5` build was tested on physical hardware. Touch orientation works, but the camera does not.
+The combined-repository Checkers build was rebuilt and validated on physical hardware as installed build `eng.root.20260814.231444`.
 
-This result validates touch behavior only. It does not establish a camera-working Checkers baseline, and Crown's camera validation does not apply to Checkers.
+| Area | Result |
+|---|---|
+| Preview | Live and upright. |
+| Still capture | Upright 1280×720 JPEG with EXIF orientation 1. |
+| Video | Seven-second 1280×720 H.264/AAC recording renders upright with the expected `-180°` display matrix. |
+| Service stability | Camera provider, `cameraserver`, and Camera2 remained alive without camera crash, ANR, or provider-death markers. |
+| Touch mapping | Correct 90° coordinate transform. |
+
+The Bluetooth framework restart loop reproduced on this build was also present in earlier Checkers runtime evidence and is outside the camera validation.
 
 ## Structural validation
 
