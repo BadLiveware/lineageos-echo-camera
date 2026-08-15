@@ -82,7 +82,7 @@ fi
     cp "$distribution_root/$pinned_manifest" .repo/manifests/crown-pinned.xml
     ln -sfn manifests/crown-pinned.xml .repo/manifest.xml
     repo sync --no-manifest-update --force-checkout
-    repo forall -c 'git reset --hard HEAD && git clean -ffdx'
+    repo forall --ignore-missing -c 'git reset --hard HEAD && git clean -ffdx'
 )
 
 "$distribution_root/scripts/apply-amazon-patches.sh" --check "$lineage_root"

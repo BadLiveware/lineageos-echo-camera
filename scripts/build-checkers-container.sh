@@ -55,7 +55,7 @@ if [[ -d "$lineage_root/.repo" ]]; then
     echo "Restoring cached LineageOS checkout"
     (
         cd "$lineage_root"
-        repo forall -c 'git reset --hard HEAD && git clean -ffdx'
+        repo forall --ignore-missing -c 'git reset --hard HEAD && git clean -ffdx'
     )
     rm -rf \
         "$lineage_root/out" \
