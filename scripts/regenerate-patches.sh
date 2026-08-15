@@ -25,6 +25,8 @@ alternate_index=
 replacing=false
 
 declare -a generated_patches=()
+declare -a stale_patches=()
+declare -A generated_patch_set=()
 
 cleanup() {
   status=$?
@@ -34,7 +36,13 @@ cleanup() {
       if [[ -f "$backup/$patch" ]]; then
         mkdir -p "$bundle/$(dirname "$patch")"
         cp "$backup/$patch" "$bundle/$patch"
+      else
+        rm -f "$bundle/$patch"
       fi
+    done
+    for patch in "${stale_patches[@]}"; do
+      mkdir -p "$bundle/$(dirname "$patch")"
+      cp "$backup/$patch" "$bundle/$patch"
     done
     if [[ -f "$backup/SHA256SUMS" ]]; then
       cp "$backup/SHA256SUMS" "$bundle/SHA256SUMS"
@@ -68,6 +76,7 @@ while IFS=$'\t' read -r order project _upstream _branch base patch scope; do
     exit 1
   }
   generated_patches+=("$patch")
+  generated_patch_set[$patch]=1
 done < "$series"
 
 while IFS=$'\t' read -r order project _upstream _branch base patch scope; do
@@ -96,14 +105,27 @@ done < "$series"
 
 # Replace only the selected device series. Shared payloads are regenerated from
 # the same owned source scopes and remain referenced by both device series.
-for patch in "${generated_patches[@]}"; do
+while IFS= read -r -d '' payload; do
+  patch=${payload#"$bundle/"}
+  if [[ -z ${generated_patch_set[$patch]:-} ]]; then
+    stale_patches+=("$patch")
+  fi
+done < <(find "$bundle/$device" -type f -name '*.patch' -print0)
+
+for patch in "${generated_patches[@]}" "${stale_patches[@]}"; do
   mkdir -p "$backup/$(dirname "$patch")" "$bundle/$(dirname "$patch")"
-  cp "$bundle/$patch" "$backup/$patch"
+  if [[ -f "$bundle/$patch" ]]; then
+    cp "$bundle/$patch" "$backup/$patch"
+  fi
 done
 cp "$bundle/SHA256SUMS" "$backup/SHA256SUMS"
 replacing=true
 for patch in "${generated_patches[@]}"; do
   cp "$staging/$patch" "$bundle/$patch"
+done
+for patch in "${stale_patches[@]}"; do
+  rm -f "$bundle/$patch"
+  printf 'removed %s\n' "$patch"
 done
 (
   cd "$bundle"
