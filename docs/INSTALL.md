@@ -4,17 +4,18 @@ The container pipeline pins Android source revisions, applies the selected devic
 
 ## Prepare firmware input
 
-Use an authorized firmware dump for the selected device. Preserve the original directory layout and a `SHA256SUMS` file covering the source:
+Use an authorized firmware dump for the selected device and preserve the original directory layout:
 
 ```text
 <device>-system-dump/
-├── SHA256SUMS
 └── system/
     └── vendor/
         └── lib/
             └── hw/
                 └── camera.mt8163.so
 ```
+
+The Crown pipeline additionally requires the dump's preserved `SHA256SUMS` file. The Checkers pipeline verifies extracted files against the repository manifest and does not read a dump-side checksum file.
 
 If `/vendor` is exposed separately, place its content below `system/vendor` in the dump.
 

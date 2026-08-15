@@ -34,7 +34,8 @@ Each device has an ordered `series.tsv` that references shared patches first and
 - Docker with Buildx and the container driver;
 - an amd64 Linux builder;
 - enough storage for a LineageOS 18.1 checkout and build cache;
-- an authorized local firmware dump for the selected device, including its preserved `SHA256SUMS`.
+- an authorized local firmware dump for the selected device;
+- for Crown, the dump's preserved `SHA256SUMS`.
 
 Create a reusable builder:
 
