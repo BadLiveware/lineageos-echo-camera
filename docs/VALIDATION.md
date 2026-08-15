@@ -22,9 +22,9 @@ Video recording was not part of Crown's final acceptance run and remains unverif
 
 ## Checkers
 
-The existing Checkers patch and build path is preserved. The combined-repository restructuring receives patch-application and configuration validation only; it does not constitute a new Checkers device, camera, or OTA regression run.
+The `checkers-camera-dev-ota-r5` build was tested on physical hardware. Touch orientation works, but the camera does not.
 
-In particular, no Crown result should be used to label a Checkers build as camera-working. Checkers hardware validation must identify the exact installed build and observed behavior.
+This result validates touch behavior only. It does not establish a camera-working Checkers baseline, and Crown's camera validation does not apply to Checkers.
 
 ## Structural validation
 
